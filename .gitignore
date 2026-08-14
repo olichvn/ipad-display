@@ -11,3 +11,4 @@ DerivedData/
 *.p8
 xcuserdata/
 .build/
+.claude/
