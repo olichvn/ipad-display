@@ -9,9 +9,15 @@ settings:
   base:
     TARGETED_DEVICE_FAMILY: "2" # iPad only
     SWIFT_VERSION: "5.0"
-    DEVELOPMENT_TEAM: ""
-    CODE_SIGN_STYLE: Automatic
     ENABLE_PREVIEWS: YES
+    # Manual (not Automatic) signing style so xcodebuild never tries to
+    # resolve a development team — this repo builds fully unsigned;
+    # AltServer/AltStore does the actual code-signing at install time.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+    DEVELOPMENT_TEAM: ""
 
 targets:
   ExternalBrowser:
