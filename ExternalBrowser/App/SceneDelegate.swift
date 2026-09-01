@@ -14,27 +14,23 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             .environmentObject(ExternalDisplayManager.shared)
 
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = PointerLockingHostingController(rootView: controller)
+        window.rootViewController = UIHostingController(rootView: controller)
         self.window = window
         window.makeKeyAndVisible()
     }
 }
 
-/// Without this, the mouse still drives the iPad's own (unused) system
-/// pointer, which the OS confines to the iPad's screen bounds — so raw
-/// GCMouse deltas stop being generated the moment that hidden pointer
-/// hits an edge, well before the tracked cursor on the external display
-/// reaches the edge of ITS screen. Pointer lock (the same mechanism
-/// full-screen games use for mouse-look) hides the system pointer
-/// entirely and reports unbounded relative motion instead, which is
-/// what InputRelay actually needs.
-final class PointerLockingHostingController<Content: View>: UIHostingController<Content> {
-    override var prefersPointerLocked: Bool { true }
-
-    // NOTE: re-asserting this on viewDidAppear (to recover pointer lock
-    // after the Settings sheet drops it) caused a worse regression —
-    // interference with the iPad's own system UI (status bar glitching,
-    // the external-display indicator disappearing on click). Reverted;
-    // the known limitation for now is that opening Settings breaks
-    // mouse control until the app is relaunched.
-}
+// Pointer lock (`prefersPointerLocked`) was tried here to stop the mouse
+// from also driving the iPad's own system pointer. It never engaged
+// reliably — Apple requires the scene to be full screen AND
+// foregroundActive, and with an external display attached plus a
+// sheet-capable SwiftUI hierarchy it ended up half-engaged: enough to
+// disturb the system pointer (status bar flashing dark on click, the
+// external-display indicator vanishing) but not enough to capture it,
+// which broke mouse input entirely on hardware.
+//
+// InputRelay instead scales raw GCMouse deltas by the ratio between the
+// external display and the iPad's own screen, so traversing the iPad's
+// screen traverses the whole external display and the tracked cursor
+// still reaches every edge. Trade-off: the iPad's own pointer stays
+// visible on the iPad screen.

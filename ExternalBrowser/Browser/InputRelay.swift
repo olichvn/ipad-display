@@ -29,6 +29,10 @@ final class InputRelay {
 
     private weak var webView: WKWebView?
     private var cursor: CGPoint = .zero
+    /// Cursor starts unpositioned: at attach() time the web view hasn't
+    /// been laid out yet, so its bounds are still zero and centring on
+    /// them would just pin the cursor to the top-left corner.
+    private var cursorInitialized = false
 
     private var mouse: GCMouse?
     private var keyboard: GCKeyboard?
@@ -42,7 +46,7 @@ final class InputRelay {
 
     func attach(to webView: WKWebView) {
         self.webView = webView
-        cursor = CGPoint(x: webView.bounds.midX, y: webView.bounds.midY)
+        cursorInitialized = false
         webView.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
         webView.evaluateJavaScript(InputRelay.keyboardBehaviorScript, completionHandler: nil)
 
@@ -112,9 +116,23 @@ final class InputRelay {
     private func handleMouseMoved(deltaX: CGFloat, deltaY: CGFloat) {
         guard let webView = webView else { return }
         let bounds = webView.bounds
+        guard bounds.width > 0, bounds.height > 0 else { return }
+
+        initializeCursorIfNeeded(in: bounds)
+
+        // Without pointer lock the mouse still drives the iPad's own
+        // system pointer, which the OS clamps to the iPad's screen — once
+        // it hits an edge, no further deltas arrive in that direction.
+        // Scaling by the ratio between the two screens means traversing
+        // the iPad's screen traverses the whole external display, so the
+        // tracked cursor can still reach every edge.
+        let iPadBounds = UIScreen.main.bounds
+        let scaleX = iPadBounds.width > 0 ? bounds.width / iPadBounds.width : 1
+        let scaleY = iPadBounds.height > 0 ? bounds.height / iPadBounds.height : 1
+
         // GameController reports +Y as up; DOM/screen coordinates are +Y down.
-        cursor.x = min(max(0, cursor.x + deltaX), bounds.width)
-        cursor.y = min(max(0, cursor.y - deltaY), bounds.height)
+        cursor.x = min(max(0, cursor.x + deltaX * scaleX), bounds.width)
+        cursor.y = min(max(0, cursor.y - deltaY * scaleY), bounds.height)
         dispatchMouse(type: "mousemove", button: 0)
     }
 
@@ -144,8 +162,16 @@ final class InputRelay {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
+    private func initializeCursorIfNeeded(in bounds: CGRect) {
+        guard !cursorInitialized else { return }
+        cursor = CGPoint(x: bounds.midX, y: bounds.midY)
+        cursorInitialized = true
+    }
+
     private func dispatchMouse(type: String, button: Int) {
         guard let webView = webView else { return }
+        // A click before any movement would otherwise land at (0,0).
+        initializeCursorIfNeeded(in: webView.bounds)
         let x = Int(cursor.x)
         let y = Int(cursor.y)
         let js = """
