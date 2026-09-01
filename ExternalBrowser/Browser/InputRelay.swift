@@ -46,8 +46,14 @@ final class InputRelay {
     /// Which view is currently drawing the cursor overlay.
     private weak var lastCursorHost: WKWebView?
 
-    private var mouse: GCMouse?
+    /// Every connected mouse gets handlers, not just the first one
+    /// reported. A Bluetooth keyboard's built-in trackpad and a USB mouse
+    /// on the dock are two separate GCMouse devices, and the one that is
+    /// listed first is not necessarily the one being used — handlers
+    /// attached to the wrong device simply never fire.
+    private var mice: [GCMouse] = []
     private var keyboard: GCKeyboard?
+    private var observingDevices = false
 
     private var shiftDown = false
     private var ctrlDown = false
@@ -65,24 +71,40 @@ final class InputRelay {
         toolbarWebView.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
         webView.evaluateJavaScript(InputRelay.keyboardBehaviorScript, completionHandler: nil)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(mouseConnected(_:)), name: .GCMouseDidConnect, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(mouseDisconnected(_:)), name: .GCMouseDidDisconnect, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardConnected(_:)), name: .GCKeyboardDidConnect, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDisconnected(_:)), name: .GCKeyboardDidDisconnect, object: nil)
+        startObservingDevices()
 
-        if let existingMouse = GCMouse.mice().first {
-            configure(mouse: existingMouse)
+        for mouse in GCMouse.mice() {
+            configure(mouse: mouse)
+        }
+        if let current = GCMouse.current {
+            configure(mouse: current)
         }
         if let existingKeyboard = GCKeyboard.coalesced {
             configure(keyboard: existingKeyboard)
         }
     }
 
+    /// Device notifications are registered once and never torn down.
+    /// They used to be removed in detach(), which opened a window — while
+    /// the external display was disconnected — during which a mouse
+    /// reconnecting on the dock went unnoticed. Switching a monitor
+    /// between machines does exactly that, and the mouse stayed dead
+    /// afterwards.
+    private func startObservingDevices() {
+        guard !observingDevices else { return }
+        observingDevices = true
+        NotificationCenter.default.addObserver(self, selector: #selector(mouseConnected(_:)), name: .GCMouseDidConnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(mouseDisconnected(_:)), name: .GCMouseDidDisconnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardConnected(_:)), name: .GCKeyboardDidConnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDisconnected(_:)), name: .GCKeyboardDidDisconnect, object: nil)
+    }
+
     func detach() {
-        mouse?.mouseInput?.mouseMovedHandler = nil
+        mice.forEach { $0.mouseInput?.mouseMovedHandler = nil }
         keyboard?.keyboardInput?.keyChangedHandler = nil
-        NotificationCenter.default.removeObserver(self)
-        mouse = nil
+        // Device observers deliberately stay registered — see
+        // startObservingDevices().
+        mice.removeAll()
         keyboard = nil
         webView = nil
         toolbarWebView = nil
@@ -97,22 +119,35 @@ final class InputRelay {
     }
 
     @objc private func mouseDisconnected(_ note: Notification) {
-        mouse = nil
+        guard let m = note.object as? GCMouse else { return }
+        mice.removeAll { $0 === m }
     }
 
+    /// Always (re)binds to `GCKeyboard.coalesced` rather than the specific
+    /// keyboard in the notification. That device merges every connected
+    /// keyboard — Bluetooth and USB-on-the-dock alike — into one input
+    /// source, so this covers both without hooking them individually. It
+    /// can be nil at launch and is re-applied whenever a keyboard appears,
+    /// which also covers a keyboard reconnecting with the dock.
     @objc private func keyboardConnected(_ note: Notification) {
-        guard let k = note.object as? GCKeyboard else { return }
-        configure(keyboard: k)
+        guard let coalesced = GCKeyboard.coalesced else { return }
+        configure(keyboard: coalesced)
     }
 
     @objc private func keyboardDisconnected(_ note: Notification) {
+        // Another keyboard may still be attached; rebind to whatever the
+        // coalesced device covers now.
         keyboard = nil
+        if let coalesced = GCKeyboard.coalesced {
+            configure(keyboard: coalesced)
+        }
     }
 
     // MARK: - Mouse
 
     private func configure(mouse: GCMouse) {
-        self.mouse = mouse
+        guard !mice.contains(where: { $0 === mouse }) else { return }
+        mice.append(mouse)
         guard let input = mouse.mouseInput else { return }
 
         input.mouseMovedHandler = { [weak self] _, deltaX, deltaY in
