@@ -12,6 +12,12 @@ struct ControllerView: View {
     @FocusState private var urlFieldFocused: Bool
     @State private var showSettings = false
 
+    /// True when the hardware keyboard and mouse belong to the page on
+    /// the external display rather than to this iPad UI.
+    private var mouseCaptured: Bool {
+        display.isConnected && settings.pointerLockEnabled
+    }
+
     var body: some View {
         NavigationView {
             Form {
@@ -32,6 +38,12 @@ struct ControllerView: View {
                 }
 
                 Section("Address") {
+                    if mouseCaptured {
+                        Text("Use the address bar on the external display. This field is disabled so the keyboard can't type into both at once.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+
                     TextField("https://example.com", text: $urlText)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
@@ -42,6 +54,11 @@ struct ControllerView: View {
                     Button("Go") { openTypedURL() }
                         .disabled(urlText.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                // Anything the hardware keyboard could focus or activate is
+                // disabled while the mouse is captured: the keyboard belongs
+                // to the external display then, and Tab/Enter would otherwise
+                // also walk and press these controls.
+                .disabled(mouseCaptured)
 
                 Section("Browser") {
                     LabeledContent("Loading", value: engine.state.isLoading ? "Yes" : "No")
@@ -77,11 +94,15 @@ struct ControllerView: View {
             // browsing. Lock it while the mouse is captured — the "Capture
             // Mouse" toggle sits in the first section, so it stays
             // reachable to undo this without scrolling.
-            .scrollDisabled(display.isConnected && settings.pointerLockEnabled)
+            .scrollDisabled(mouseCaptured)
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
-            .background(keyboardShortcuts)
+            // Key commands reach the responder chain independently of raw
+            // key presses, so they have to be withdrawn rather than
+            // swallowed. Bare Escape especially: it's constant in a
+            // terminal session and would otherwise also exit full screen.
+            .background(mouseCaptured ? nil : keyboardShortcuts)
             .onAppear {
                 urlText = engine.state.url?.absoluteString ?? ""
                 if engine.state.url == nil {

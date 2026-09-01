@@ -337,8 +337,10 @@ final class InputRelay {
             js += """
 
               if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-                var start = el.selectionStart || el.value.length;
-                var end = el.selectionEnd || el.value.length;
+                // Explicit null checks: a caret at index 0 is falsy, so
+                // `selectionStart || length` would append at the end.
+                var start = el.selectionStart != null ? el.selectionStart : el.value.length;
+                var end = el.selectionEnd != null ? el.selectionEnd : el.value.length;
                 el.value = el.value.slice(0, start) + '\(escapedChar)' + el.value.slice(end);
                 el.selectionStart = el.selectionEnd = start + 1;
                 el.dispatchEvent(new Event('input', {bubbles:true}));
@@ -348,8 +350,8 @@ final class InputRelay {
             js += """
 
               if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-                var start = el.selectionStart || 0;
-                var end = el.selectionEnd || 0;
+                var start = el.selectionStart != null ? el.selectionStart : el.value.length;
+                var end = el.selectionEnd != null ? el.selectionEnd : el.value.length;
                 if (start === end && start > 0) { start -= 1; }
                 el.value = el.value.slice(0, start) + el.value.slice(end);
                 el.selectionStart = el.selectionEnd = start;

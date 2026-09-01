@@ -53,4 +53,36 @@ final class PointerLockingHostingController<Content: View>: UIHostingController<
     @objc private func pointerLockPreferenceChanged() {
         setNeedsUpdateOfPrefersPointerLocked()
     }
+
+    /// While the mouse is captured, the physical keyboard belongs to the
+    /// page on the external display — InputRelay delivers it there via
+    /// the GameController framework, which is a separate input path from
+    /// the responder chain. Without swallowing these, every keystroke is
+    /// ALSO handled by this scene's SwiftUI controls: Tab walks focus to
+    /// the "Go" button and Enter presses it, and typed characters append
+    /// to the iPad's own address field, so a later Enter navigates to a
+    /// mangled URL.
+    private var swallowsHardwareKeys: Bool {
+        AppSettings.shared.pointerLockEnabled && ExternalDisplayManager.shared.isConnected
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard !swallowsHardwareKeys else { return }
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard !swallowsHardwareKeys else { return }
+        super.pressesChanged(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard !swallowsHardwareKeys else { return }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard !swallowsHardwareKeys else { return }
+        super.pressesCancelled(presses, with: event)
+    }
 }
