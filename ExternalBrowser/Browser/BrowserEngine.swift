@@ -189,14 +189,10 @@ extension BrowserEngine: WKUIDelegate {
         presenter.present(alert, animated: true)
     }
 
-    /// JS dialogs are presented on whichever screen the page is actually
-    /// visible on (usually the external display; falls back to the iPad
-    /// controller if no external display is connected).
+    /// JS dialogs are presented from whichever window the web view is
+    /// actually in right now, wherever the user has dragged it.
     private func topPresenter() -> UIViewController? {
-        let window = ExternalDisplayManager.shared.externalWindow ?? UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
-            .first
-        var top = window?.rootViewController
+        var top = webView.window?.rootViewController
         while let presented = top?.presentedViewController {
             top = presented
         }

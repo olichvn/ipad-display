@@ -33,25 +33,22 @@ targets:
         CFBundleShortVersionString: "1.0"
         CFBundleVersion: "1"
         LSRequiresIPhoneOS: true
-        UIRequiresFullScreen: true
+        # Must NOT be true: UIRequiresFullScreen disables proper
+        # multi-window/multi-scene support, which the "drag the browser
+        # window onto the external display" workflow depends on.
+        UIRequiresFullScreen: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationPortrait
         UILaunchScreen: {}
-        UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: true
-          UISceneConfigurations:
-            UIWindowSceneSessionRoleApplication:
-              - UISceneConfigurationName: Default Configuration
-                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
-            UIWindowSceneSessionRoleExternalDisplayNonInteractive:
-              - UISceneConfigurationName: External Display
-                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).ExternalDisplaySceneDelegate
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ipaddisplay.ExternalBrowser
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
+        # SwiftUI App lifecycle (see ExternalBrowserApp.swift) — let
+        # Xcode auto-generate the scene manifest for its WindowGroups
+        # instead of hand-writing UIApplicationSceneManifest.
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES

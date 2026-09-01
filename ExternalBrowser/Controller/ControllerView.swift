@@ -6,6 +6,7 @@ import SwiftUI
 struct ControllerView: View {
     @EnvironmentObject var engine: BrowserEngine
     @EnvironmentObject var display: ExternalDisplayManager
+    @Environment(\.openWindow) private var openWindow
 
     @State private var urlText: String = ""
     @FocusState private var urlFieldFocused: Bool
@@ -20,6 +21,10 @@ struct ControllerView: View {
                         LabeledContent("Resolution", value: "\(Int(display.pixelResolution.width)) × \(Int(display.pixelResolution.height))")
                         LabeledContent("Window Size", value: "\(Int(display.pointSize.width)) × \(Int(display.pointSize.height)) pt")
                     }
+                    Button("Open Browser Window") { openWindow(id: "browser") }
+                    Text("Drag the new window's title bar onto the external display to move it there — regular iPadOS windows are fully interactive with mouse/keyboard on any screen.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                 }
 
                 Section("Address") {
@@ -56,7 +61,6 @@ struct ControllerView: View {
                     Button(engine.state.isFullScreen ? "Exit Full Screen" : "Full Screen") {
                         engine.toggleFullScreen()
                     }
-                    .disabled(!display.isConnected)
                 }
 
                 Section {

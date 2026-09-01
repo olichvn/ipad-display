@@ -1,58 +1,58 @@
 import UIKit
 import Combine
 
-/// Published status about the external display, plus a weak reference to
-/// its UIWindow (owned by ExternalDisplaySceneDelegate, not here) so other
-/// code — e.g. presenting a JS alert on the right screen — can find it.
-///
-/// The window itself is created/destroyed by ExternalDisplaySceneDelegate
-/// in response to genuine UIWindowScene connect/disconnect lifecycle
-/// events for the `.windowExternalDisplayNonInteractive` role. An earlier
-/// version of this file drove a plain UIScreen + UIWindow(frame:) instead
-/// (no scene role at all) — on real hardware that fell back to the OS's
-/// automatic screen mirroring instead of giving the app its own external
-/// window, which is exactly the failure mode the scene-role API exists
-/// to avoid.
-final class ExternalDisplayManager: ObservableObject {
+/// Purely informational now: publishes whether a second screen is
+/// physically connected and its resolution, for the iPad controller's
+/// status panel. It no longer creates any window itself — the browser
+/// window is a normal interactive SwiftUI WindowGroup (see
+/// ExternalBrowserApp.swift) that the user drags onto the external
+/// display using iPadOS's own windowing system, since the dedicated
+/// external-display scene role turned out to accept no touch/mouse
+/// input at all on real hardware.
+final class ExternalDisplayManager: NSObject, ObservableObject {
     static let shared = ExternalDisplayManager()
 
     @Published private(set) var isConnected: Bool = false
     @Published private(set) var displayName: String = ""
-    /// Native pixel resolution of the external display (e.g. 3840x2160).
     @Published private(set) var pixelResolution: CGSize = .zero
-    /// Point size of the external display's UIScreen bounds, i.e. the
-    /// coordinate space the external UIWindow actually lays out in.
     @Published private(set) var pointSize: CGSize = .zero
 
-    private(set) weak var externalWindow: UIWindow?
+    private var started = false
 
-    private init() {}
-
-    func sceneConnected(window: UIWindow, screen: UIScreen) {
-        externalWindow = window
-        updateGeometry(for: screen)
-        displayName = "External Display"
-        isConnected = true
-
-        let settings = AppSettings.shared
-        if BrowserEngine.shared.state.url == nil, settings.autoActivateBrowser {
-            BrowserEngine.shared.load(urlString: settings.homepage)
-        }
-        if settings.startInFullScreen {
-            BrowserEngine.shared.setFullScreen(true)
-        }
+    private override init() {
+        super.init()
+        start()
     }
 
-    func sceneDisconnected() {
-        externalWindow = nil
-        isConnected = false
-        displayName = ""
-        pixelResolution = .zero
-        pointSize = .zero
+    private func start() {
+        guard !started else { return }
+        started = true
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleChange), name: UIScreen.didConnectNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleChange), name: UIScreen.didDisconnectNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleChange), name: UIScreen.modeDidChangeNotification, object: nil)
+
+        refresh()
     }
 
-    func updateGeometry(for screen: UIScreen) {
+    @objc private func handleChange() {
+        refresh()
+    }
+
+    private func refresh() {
+        guard let screen = UIScreen.screens.first(where: { $0 != UIScreen.main }) else {
+            isConnected = false
+            displayName = ""
+            pixelResolution = .zero
+            pointSize = .zero
+            return
+        }
         pixelResolution = screen.currentMode?.size ?? screen.bounds.size
         pointSize = screen.bounds.size
+        displayName = "External Display"
+        isConnected = true
     }
 }
