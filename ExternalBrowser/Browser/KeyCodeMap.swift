@@ -82,11 +82,9 @@ enum KeyCodeMap {
         .pageUp: ("PageUp", "PageUp", 33),
         .pageDown: ("PageDown", "PageDown", 34),
         .deleteForward: ("Delete", "Delete", 46),
-        .capsLock: ("CapsLock", "CapsLock", 20),
-        .f1: ("F1", "F1", 112), .f2: ("F2", "F2", 113), .f3: ("F3", "F3", 114),
-        .f4: ("F4", "F4", 115), .f5: ("F5", "F5", 116), .f6: ("F6", "F6", 117),
-        .f7: ("F7", "F7", 118), .f8: ("F8", "F8", 119), .f9: ("F9", "F9", 120),
-        .f10: ("F10", "F10", 121), .f11: ("F11", "F11", 122), .f12: ("F12", "F12", 123)
+        .capsLock: ("CapsLock", "CapsLock", 20)
+        // F1-F12 omitted: GCKeyCode has no .f1...f12 members (confirmed
+        // by a failed build) - not essential for the current use case.
     ]
 
     enum ModifierKind {
