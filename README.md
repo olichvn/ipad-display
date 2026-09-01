@@ -30,6 +30,30 @@ Not yet built (waiting on Phase 1/2 hardware confirmation before continuing,
 per spec section 38): further Microsoft 365 / general web-compatibility
 testing pass, refined disconnect/reconnect polish.
 
+## Stable fallbacks
+
+Two hardware-confirmed builds to fall back to. Work continues from
+**`stable-2`**.
+
+| Tag | What it is | Local `.ipa` |
+| --- | --- | --- |
+| `stable-2` | `stable-1` plus DOM wheel scrolling, so scroll reaches remote-desktop sessions and scrollable panes inside pages. **Current baseline.** | `build-artifacts/ExternalBrowser-STABLE2.ipa` |
+| `stable-1` | Mouse, keyboard, modifier keys and the external toolbar working; scroll still goes to the outer page only. | `build-artifacts/ExternalBrowser-STABLE.ipa` |
+
+```bash
+git checkout stable-2
+```
+
+Sideload the matching `.ipa` to recover without waiting for a rebuild.
+
+**Known quirk in both:** pointer lock only engages after the app goes
+briefly inactive, so after launching you have to pull Control Center
+down and back up before the mouse drives the external display. iPadOS
+re-evaluates pointer lock only on that activation transition and offers
+no API to trigger one, which is why the in-app "Re-apply Mouse Capture"
+button cannot substitute for it. Removing that dependency is the next
+piece of work.
+
 ## Security & battery notes
 
 - **App Transport Security is set to allow arbitrary loads** (plain HTTP,
