@@ -117,6 +117,16 @@ final class BrowserEngine: NSObject, ObservableObject {
         webView.load(URLRequest(url: url))
     }
 
+    /// Guarantees the page has a live document, loading the homepage
+    /// (about:blank by default) if nothing has been opened yet. The input
+    /// relay dispatches into the page's JavaScript context, so with no
+    /// document there is nothing to dispatch into.
+    func ensureDocumentLoaded() {
+        guard webView.url == nil else { return }
+        let homepage = AppSettings.shared.homepage.trimmingCharacters(in: .whitespacesAndNewlines)
+        load(urlString: homepage.isEmpty ? "about:blank" : homepage)
+    }
+
     func goBack() { webView.goBack() }
     func goForward() { webView.goForward() }
     func reload() { webView.reload() }

@@ -170,13 +170,22 @@ final class InputRelay {
 
         initializeCursorIfNeeded(in: CGRect(origin: .zero, size: size))
 
-        // 1:1 with the physical mouse. (Deltas were briefly scaled by the
-        // external/iPad screen ratio to work around the OS clamping its
-        // own pointer at the iPad's screen edge; pointer lock removes that
-        // clamping, so scaling only made the cursor move too fast.)
+        // The OS clamps its own pointer to the iPad's screen and stops
+        // sending deltas once it reaches an edge, so without scaling the
+        // cursor can never reach the far edges of a larger external
+        // display. Scaling by the ratio between the two screens maps a
+        // full sweep of the iPad's screen onto a full sweep of the
+        // external one. (This felt too fast in an earlier build only
+        // because pointer lock was also engaged then, removing the
+        // clamping that makes the scaling necessary — that lock proved
+        // unreliable and is gone, see PointerLockingHostingController.)
+        let iPadBounds = UIScreen.main.bounds
+        let scaleX = iPadBounds.width > 0 ? size.width / iPadBounds.width : 1
+        let scaleY = iPadBounds.height > 0 ? size.height / iPadBounds.height : 1
+
         // GameController reports +Y as up; DOM/screen coordinates are +Y down.
-        cursor.x = min(max(0, cursor.x + deltaX), size.width)
-        cursor.y = min(max(0, cursor.y - deltaY), size.height)
+        cursor.x = min(max(0, cursor.x + deltaX * scaleX), size.width)
+        cursor.y = min(max(0, cursor.y - deltaY * scaleY), size.height)
         dispatchMouse(type: "mousemove", button: 0)
     }
 

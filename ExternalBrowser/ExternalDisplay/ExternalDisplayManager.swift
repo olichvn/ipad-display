@@ -8,6 +8,10 @@ import Combine
 final class ExternalDisplayManager: ObservableObject {
     static let shared = ExternalDisplayManager()
 
+    /// Posted when the external display connects or disconnects, so UIKit
+    /// code (which can't observe @Published) can react.
+    static let connectionChanged = Notification.Name("externalDisplayConnectionChanged")
+
     @Published private(set) var isConnected: Bool = false
     @Published private(set) var displayName: String = ""
     @Published private(set) var pixelResolution: CGSize = .zero
@@ -20,13 +24,17 @@ final class ExternalDisplayManager: ObservableObject {
         displayName = "External Display"
         isConnected = true
 
-        let settings = AppSettings.shared
-        if BrowserEngine.shared.state.url == nil, settings.autoActivateBrowser {
-            BrowserEngine.shared.load(urlString: settings.homepage)
-        }
-        if settings.startInFullScreen {
+        // Always load something, rather than only when "automatically
+        // activate browser" is set: the input relay drives the page by
+        // injecting into its JavaScript context, and with no document
+        // loaded there is nothing to inject into — which made the mouse
+        // look dead until a URL was entered by hand.
+        BrowserEngine.shared.ensureDocumentLoaded()
+
+        if AppSettings.shared.startInFullScreen {
             BrowserEngine.shared.setFullScreen(true)
         }
+        NotificationCenter.default.post(name: ExternalDisplayManager.connectionChanged, object: nil)
     }
 
     func sceneDisconnected() {
@@ -34,6 +42,7 @@ final class ExternalDisplayManager: ObservableObject {
         displayName = ""
         pixelResolution = .zero
         pointSize = .zero
+        NotificationCenter.default.post(name: ExternalDisplayManager.connectionChanged, object: nil)
     }
 
     func updateGeometry(for screen: UIScreen) {
