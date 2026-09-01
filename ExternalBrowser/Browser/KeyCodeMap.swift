@@ -73,7 +73,28 @@ enum KeyCodeMap {
         .deleteForward: "Delete"
     ]
 
-    static func isShiftKey(_ keyCode: GCKeyCode) -> Bool {
-        keyCode == .leftShift || keyCode == .rightShift
+    enum Modifier {
+        case shift, control, alt, meta
+
+        /// The DOM `KeyboardEvent.key` name when the modifier itself is
+        /// forwarded as a keydown/keyup (not just a flag on other events).
+        var domKey: String {
+            switch self {
+            case .shift: return "Shift"
+            case .control: return "Control"
+            case .alt: return "Alt"
+            case .meta: return "Meta"
+            }
+        }
+    }
+
+    static func modifier(for keyCode: GCKeyCode) -> Modifier? {
+        switch keyCode {
+        case .leftShift, .rightShift: return .shift
+        case .leftControl, .rightControl: return .control
+        case .leftAlt, .rightAlt: return .alt
+        case .leftGUI, .rightGUI: return .meta
+        default: return nil
+        }
     }
 }

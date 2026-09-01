@@ -29,7 +29,7 @@ final class BrowserEngine: NSObject, ObservableObject {
         // Re-run on every navigation (not just once) — a page load
         // replaces the DOM and would otherwise wipe the synthetic
         // cursor / toolbar InputRelay and this class depend on.
-        for source in [InputRelay.cursorBootstrapScript, BrowserEngine.toolbarBootstrapScript] {
+        for source in [InputRelay.cursorBootstrapScript, InputRelay.keyboardBehaviorScript, BrowserEngine.toolbarBootstrapScript] {
             let script = WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
             configuration.userContentController.addUserScript(script)
         }

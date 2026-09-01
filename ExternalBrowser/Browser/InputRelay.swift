@@ -16,29 +16,35 @@ import UIKit
 /// nominally has "focus."
 ///
 /// Known limitation: dispatched events are synthetic (`isTrusted ==
-/// false`). Sites that specifically distinguish trusted from synthetic
-/// events (some anti-automation/anti-bot checks) won't respond
-/// correctly. This is expected to work well for the primary target
-/// use case (a Guacamole remote-desktop session, which just wants a
-/// raw mouse/keyboard event stream to relay onward) and for ordinary
-/// links/scrolling/forms; it's the wrong tool for sites that actively
-/// resist automation.
+/// false`), and browser *default actions* tied to trusted input (native
+/// Tab focus movement, Shift+Arrow text selection, native form submit
+/// on Enter) don't fire automatically — those are reimplemented here in
+/// JS instead. Sites that specifically distinguish trusted from
+/// synthetic events (some anti-automation checks) won't respond
+/// correctly; that's expected to be irrelevant for the primary target
+/// use case (a Guacamole remote-desktop session, which just wants a raw
+/// mouse/keyboard event stream to relay onward).
 final class InputRelay {
     static let shared = InputRelay()
 
     private weak var webView: WKWebView?
     private var cursor: CGPoint = .zero
-    private var shiftDown = false
 
     private var mouse: GCMouse?
     private var keyboard: GCKeyboard?
+
+    private var shiftDown = false
+    private var ctrlDown = false
+    private var altDown = false
+    private var metaDown = false
 
     private init() {}
 
     func attach(to webView: WKWebView) {
         self.webView = webView
         cursor = CGPoint(x: webView.bounds.midX, y: webView.bounds.midY)
-        injectCursorScript()
+        webView.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
+        webView.evaluateJavaScript(InputRelay.keyboardBehaviorScript, completionHandler: nil)
 
         NotificationCenter.default.addObserver(self, selector: #selector(mouseConnected(_:)), name: .GCMouseDidConnect, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(mouseDisconnected(_:)), name: .GCMouseDidDisconnect, object: nil)
@@ -60,6 +66,7 @@ final class InputRelay {
         mouse = nil
         keyboard = nil
         webView = nil
+        shiftDown = false; ctrlDown = false; altDown = false; metaDown = false
     }
 
     @objc private func mouseConnected(_ note: Notification) {
@@ -79,6 +86,8 @@ final class InputRelay {
     @objc private func keyboardDisconnected(_ note: Notification) {
         keyboard = nil
     }
+
+    // MARK: - Mouse
 
     private func configure(mouse: GCMouse) {
         self.mouse = mouse
@@ -100,13 +109,6 @@ final class InputRelay {
         }
     }
 
-    private func configure(keyboard: GCKeyboard) {
-        self.keyboard = keyboard
-        keyboard.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
-            self?.handleKey(keyCode: keyCode, pressed: pressed)
-        }
-    }
-
     private func handleMouseMoved(deltaX: CGFloat, deltaY: CGFloat) {
         guard let webView = webView else { return }
         let bounds = webView.bounds
@@ -116,18 +118,30 @@ final class InputRelay {
         dispatchMouse(type: "mousemove", button: 0)
     }
 
+    private var lastScrollTime: CFTimeInterval = 0
+    private var settleWorkItem: DispatchWorkItem?
+
     private func handleScroll(deltaX: CGFloat, deltaY: CGFloat) {
         guard let webView = webView else { return }
-        // Tuned down from an initial 40 — that made the wheel scroll the
-        // page far too fast (each tick reports a larger value than a
-        // typical analog-stick-style delta).
-        let sensitivity: CGFloat = 6
+        // Low sensitivity + inverted from the initial attempt, per
+        // hardware feedback (was both too fast and backwards).
+        let sensitivity: CGFloat = 2
         var offset = webView.scrollView.contentOffset
-        offset.x -= deltaX * sensitivity
-        offset.y += deltaY * sensitivity
+        offset.x += deltaX * sensitivity
+        offset.y -= deltaY * sensitivity
         offset.x = max(0, offset.x)
         offset.y = max(0, offset.y)
         webView.scrollView.setContentOffset(offset, animated: false)
+
+        // WKWebView's tile-based rendering can leave stale/blank content
+        // after a burst of rapid, code-driven (non-gesture) scroll
+        // updates — nudge it once scrolling settles to force a repaint.
+        settleWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.webView?.evaluateJavaScript("window.scrollBy(0,1);window.scrollBy(0,-1);", completionHandler: nil)
+        }
+        settleWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     private func dispatchMouse(type: String, button: Int) {
@@ -137,13 +151,12 @@ final class InputRelay {
         let js = """
         (function(){
           var el = document.elementFromPoint(\(x), \(y)) || document.body;
-          var ev = new MouseEvent('\(type)', {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y), button:\(button)});
-          el.dispatchEvent(ev);
+          var opts = {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y), button:\(button), shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)};
+          el.dispatchEvent(new MouseEvent('\(type)', opts));
           if ('\(type)' === 'mousedown') {
             var focusable = el.closest('input, textarea, [contenteditable="true"]');
             if (focusable) focusable.focus();
-            var clickEv = new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y), button:\(button)});
-            el.dispatchEvent(clickEv);
+            el.dispatchEvent(new MouseEvent('click', opts));
           }
           if (window.__extbrowserSetCursor) window.__extbrowserSetCursor(\(x), \(y));
         })();
@@ -173,29 +186,41 @@ final class InputRelay {
     })();
     """
 
-    private func injectCursorScript() {
-        webView?.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
+    // MARK: - Keyboard
+
+    private func configure(keyboard: GCKeyboard) {
+        self.keyboard = keyboard
+        keyboard.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
+            self?.handleKey(keyCode: keyCode, pressed: pressed)
+        }
     }
 
     private func handleKey(keyCode: GCKeyCode, pressed: Bool) {
-        if KeyCodeMap.isShiftKey(keyCode) {
-            shiftDown = pressed
+        if let modifier = KeyCodeMap.modifier(for: keyCode) {
+            switch modifier {
+            case .shift: shiftDown = pressed
+            case .control: ctrlDown = pressed
+            case .alt: altDown = pressed
+            case .meta: metaDown = pressed
+            }
+            dispatchKey(domKey: modifier.domKey, char: nil, pressed: pressed)
             return
         }
-        guard pressed, let mapped = KeyCodeMap.map(keyCode, shift: shiftDown) else { return }
-        dispatchKey(domKey: mapped.domKey, char: mapped.char)
+        guard let mapped = KeyCodeMap.map(keyCode, shift: shiftDown) else { return }
+        dispatchKey(domKey: mapped.domKey, char: pressed ? mapped.char : nil, pressed: pressed)
     }
 
-    private func dispatchKey(domKey: String, char: Character?) {
+    private func dispatchKey(domKey: String, char: Character?, pressed: Bool) {
         guard let webView = webView else { return }
         let escapedKey = domKey.replacingOccurrences(of: "'", with: "\\'")
+        let type = pressed ? "keydown" : "keyup"
         var js = """
         (function(){
           var el = document.activeElement || document.body;
-          var down = new KeyboardEvent('keydown', {key:'\(escapedKey)', bubbles:true, cancelable:true});
-          el.dispatchEvent(down);
+          var opts = {key:'\(escapedKey)', bubbles:true, cancelable:true, shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)};
+          el.dispatchEvent(new KeyboardEvent('\(type)', opts));
         """
-        if let char = char {
+        if pressed, let char = char {
             let escapedChar = String(char).replacingOccurrences(of: "'", with: "\\'")
             js += """
 
@@ -207,7 +232,7 @@ final class InputRelay {
                 el.dispatchEvent(new Event('input', {bubbles:true}));
               }
             """
-        } else if domKey == "Backspace" {
+        } else if pressed && domKey == "Backspace" {
             js += """
 
               if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
@@ -219,7 +244,7 @@ final class InputRelay {
                 el.dispatchEvent(new Event('input', {bubbles:true}));
               }
             """
-        } else if domKey == "Enter" {
+        } else if pressed && domKey == "Enter" {
             js += """
 
               if ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.form) {
@@ -229,10 +254,57 @@ final class InputRelay {
         }
         js += """
 
-          var up = new KeyboardEvent('keyup', {key:'\(escapedKey)', bubbles:true, cancelable:true});
-          el.dispatchEvent(up);
         })();
         """
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
+
+    /// Reimplements the browser *default actions* that only fire for
+    /// trusted (real hardware) keyboard events and are silently ignored
+    /// for our synthetic ones: Tab moving focus between fields, and
+    /// Shift+Arrow/Home/End extending a text selection.
+    static let keyboardBehaviorScript = """
+    (function(){
+      if (window.__extbrowserKeyboardBehaviorInstalled) return;
+      window.__extbrowserKeyboardBehaviorInstalled = true;
+
+      function focusable(){
+        return Array.prototype.slice.call(document.querySelectorAll(
+          'input:not([disabled]):not([type=hidden]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+        )).filter(function(el){ return el.offsetParent !== null; });
+      }
+
+      document.addEventListener('keydown', function(e){
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          var items = focusable();
+          var idx = items.indexOf(document.activeElement);
+          var next = e.shiftKey
+            ? items[(idx - 1 + items.length) % items.length]
+            : items[(idx + 1) % items.length];
+          if (next) next.focus();
+          return;
+        }
+
+        var el = document.activeElement;
+        var isText = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+        var navKeys = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'];
+        if (isText && e.shiftKey && navKeys.indexOf(e.key) !== -1) {
+          var start = el.selectionStart || 0;
+          var end = el.selectionEnd || 0;
+          var anchor = (typeof el.__extbrowserAnchor === 'number') ? el.__extbrowserAnchor : start;
+          var caret = (end !== anchor) ? end : start;
+          if (e.key === 'ArrowLeft') caret = Math.max(0, caret - 1);
+          if (e.key === 'ArrowRight') caret = Math.min(el.value.length, caret + 1);
+          if (e.key === 'Home') caret = 0;
+          if (e.key === 'End') caret = el.value.length;
+          el.__extbrowserAnchor = anchor;
+          el.selectionStart = Math.min(anchor, caret);
+          el.selectionEnd = Math.max(anchor, caret);
+        } else if (isText && !e.shiftKey && navKeys.indexOf(e.key) !== -1) {
+          delete el.__extbrowserAnchor;
+        }
+      }, true);
+    })();
+    """
 }
