@@ -28,13 +28,11 @@ final class BrowserEngine: NSObject, ObservableObject {
 
         // Re-run on every navigation (not just once) — a page load
         // replaces the DOM and would otherwise wipe the synthetic
-        // cursor InputRelay depends on.
-        let cursorScript = WKUserScript(
-            source: InputRelay.cursorBootstrapScript,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: true
-        )
-        configuration.userContentController.addUserScript(cursorScript)
+        // cursor / toolbar InputRelay and this class depend on.
+        for source in [InputRelay.cursorBootstrapScript, BrowserEngine.toolbarBootstrapScript] {
+            let script = WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+            configuration.userContentController.addUserScript(script)
+        }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
@@ -45,6 +43,7 @@ final class BrowserEngine: NSObject, ObservableObject {
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        webView.configuration.userContentController.add(self, name: "extBrowserBridge")
         observeWebView()
     }
 
@@ -64,8 +63,22 @@ final class BrowserEngine: NSObject, ObservableObject {
                 self?.state.url = webView.url
                 self?.state.canGoBack = webView.canGoBack
                 self?.state.canGoForward = webView.canGoForward
+                self?.syncToolbarURL()
             }
         }
+    }
+
+    /// Pushes the current URL/full-screen state into the in-page toolbar
+    /// InputRelay's synthetic input can actually reach (see
+    /// toolbarBootstrapScript below).
+    private func syncToolbarURL() {
+        guard let urlString = state.url?.absoluteString else { return }
+        let escaped = urlString.replacingOccurrences(of: "'", with: "\\'")
+        webView.evaluateJavaScript("window.__extbrowserSetURL && window.__extbrowserSetURL('\(escaped)')", completionHandler: nil)
+    }
+
+    private func syncToolbarVisibility() {
+        webView.evaluateJavaScript("window.__extbrowserSetToolbarVisible && window.__extbrowserSetToolbarVisible(\(!state.isFullScreen))", completionHandler: nil)
     }
 
     // MARK: - Navigation
@@ -86,10 +99,12 @@ final class BrowserEngine: NSObject, ObservableObject {
 
     func toggleFullScreen() {
         state.isFullScreen.toggle()
+        syncToolbarVisibility()
     }
 
     func setFullScreen(_ value: Bool) {
         state.isFullScreen = value
+        syncToolbarVisibility()
     }
 
     func clearWebsiteData(completion: @escaping () -> Void) {
@@ -126,6 +141,81 @@ final class BrowserEngine: NSObject, ObservableObject {
     }
 }
 
+// MARK: - WKScriptMessageHandler
+
+extension BrowserEngine: WKScriptMessageHandler {
+    /// Receives messages from the in-page toolbar (toolbarBootstrapScript)
+    /// so its buttons/URL field — reachable by InputRelay's synthetic
+    /// input because they live in the page's own DOM — can drive real
+    /// navigation.
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        switch action {
+        case "navigate":
+            if let value = body["value"] as? String { load(urlString: value) }
+        case "back": goBack()
+        case "forward": goForward()
+        case "reload": reload()
+        default: break
+        }
+    }
+
+    /// In-page toolbar: back/forward/reload + an editable URL field, all
+    /// reachable via InputRelay's synthetic click/keyboard events since
+    /// (unlike a native SwiftUI toolbar) it's part of the page's own DOM.
+    /// Talks back to Swift via the "extBrowserBridge" message handler.
+    static let toolbarBootstrapScript = """
+    (function(){
+      if (document.getElementById('__extbrowser_toolbar')) return;
+      var bar = document.createElement('div');
+      bar.id = '__extbrowser_toolbar';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;height:44px;background:rgba(28,28,30,0.92);display:flex;align-items:center;padding:0 8px;gap:8px;z-index:2147483646;font-family:-apple-system,sans-serif;';
+
+      function makeButton(label){
+        var b = document.createElement('button');
+        b.textContent = label;
+        b.style.cssText = 'width:36px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;';
+        return b;
+      }
+
+      var back = makeButton('\\u25C0');
+      var fwd = makeButton('\\u25B6');
+      var reload = makeButton('\\u21BB');
+      var url = document.createElement('input');
+      url.id = '__eb_url';
+      url.type = 'text';
+      url.value = location.href;
+      url.style.cssText = 'flex:1;height:32px;border-radius:6px;border:none;padding:0 10px;font-size:15px;';
+
+      bar.appendChild(back);
+      bar.appendChild(fwd);
+      bar.appendChild(reload);
+      bar.appendChild(url);
+      document.documentElement.appendChild(bar);
+
+      function send(action, value){
+        if (window.webkit && window.webkit.messageHandlers.extBrowserBridge) {
+          window.webkit.messageHandlers.extBrowserBridge.postMessage(value === undefined ? {action:action} : {action:action, value:value});
+        }
+      }
+
+      back.addEventListener('click', function(){ send('back'); });
+      fwd.addEventListener('click', function(){ send('forward'); });
+      reload.addEventListener('click', function(){ send('reload'); });
+      url.addEventListener('keydown', function(e){
+        if (e.key === 'Enter') { send('navigate', url.value); }
+      });
+
+      window.__extbrowserSetURL = function(newURL){
+        if (document.activeElement !== url) { url.value = newURL; }
+      };
+      window.__extbrowserSetToolbarVisible = function(visible){
+        bar.style.display = visible ? 'flex' : 'none';
+      };
+    })();
+    """
+}
+
 // MARK: - WKNavigationDelegate
 
 extension BrowserEngine: WKNavigationDelegate {
@@ -139,6 +229,8 @@ extension BrowserEngine: WKNavigationDelegate {
         state.progress = 1
         state.canGoBack = webView.canGoBack
         state.canGoForward = webView.canGoForward
+        syncToolbarURL()
+        syncToolbarVisibility()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

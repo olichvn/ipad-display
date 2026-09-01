@@ -94,7 +94,9 @@ final class InputRelay {
             self?.dispatchMouse(type: pressed ? "mousedown" : "mouseup", button: 2)
         }
         input.scroll.valueChangedHandler = { [weak self] _, xValue, yValue in
-            self?.handleScroll(deltaX: CGFloat(xValue), deltaY: CGFloat(yValue))
+            // Axes came back swapped on hardware: physical vertical wheel
+            // motion was reported as xValue, scrolling the page sideways.
+            self?.handleScroll(deltaX: CGFloat(yValue), deltaY: CGFloat(xValue))
         }
     }
 

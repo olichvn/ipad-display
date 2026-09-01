@@ -2,58 +2,20 @@ import SwiftUI
 import WebKit
 
 /// The view shown on the EXTERNAL monitor. Never shown on the iPad itself.
+///
+/// No native SwiftUI toolbar here on purpose — this scene accepts no
+/// touch/mouse input from the OS (see ExternalDisplaySceneDelegate), so
+/// a native toolbar would be permanently unreachable. Navigation
+/// controls instead live inside the page's own DOM (see
+/// BrowserEngine.toolbarBootstrapScript), where InputRelay's synthetic
+/// mouse/keyboard events can actually reach them.
 struct BrowserView: View {
     @EnvironmentObject var engine: BrowserEngine
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !engine.state.isFullScreen {
-                toolbar
-            }
-            WebViewRepresentable(webView: engine.webView)
-        }
-        .ignoresSafeArea()
-        .background(Color.black)
-    }
-
-    private var toolbar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                Button(action: engine.goBack) {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!engine.state.canGoBack)
-
-                Button(action: engine.goForward) {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!engine.state.canGoForward)
-
-                Button(action: engine.reload) {
-                    Image(systemName: engine.state.isLoading ? "xmark" : "arrow.clockwise")
-                }
-                .onTapGesture {
-                    engine.state.isLoading ? engine.stop() : engine.reload()
-                }
-
-                Text(engine.state.url?.absoluteString ?? "")
-                    .font(.system(size: 14))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundColor(.secondary)
-
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
-            if engine.state.isLoading {
-                ProgressView(value: engine.state.progress)
-                    .progressViewStyle(.linear)
-                    .frame(height: 2)
-            }
-        }
-        .background(.thinMaterial)
+        WebViewRepresentable(webView: engine.webView)
+            .ignoresSafeArea()
+            .background(Color.black)
     }
 }
 

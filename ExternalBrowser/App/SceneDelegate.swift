@@ -14,8 +14,20 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             .environmentObject(ExternalDisplayManager.shared)
 
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = UIHostingController(rootView: controller)
+        window.rootViewController = PointerLockingHostingController(rootView: controller)
         self.window = window
         window.makeKeyAndVisible()
     }
+}
+
+/// Without this, the mouse still drives the iPad's own (unused) system
+/// pointer, which the OS confines to the iPad's screen bounds — so raw
+/// GCMouse deltas stop being generated the moment that hidden pointer
+/// hits an edge, well before the tracked cursor on the external display
+/// reaches the edge of ITS screen. Pointer lock (the same mechanism
+/// full-screen games use for mouse-look) hides the system pointer
+/// entirely and reports unbounded relative motion instead, which is
+/// what InputRelay actually needs.
+final class PointerLockingHostingController<Content: View>: UIHostingController<Content> {
+    override var prefersPointerLocked: Bool { true }
 }
