@@ -129,9 +129,7 @@ struct ControllerView: View {
             .background(mouseCaptured ? nil : keyboardShortcuts)
             .onAppear {
                 urlText = engine.state.url?.absoluteString ?? ""
-                if engine.state.url == nil {
-                    engine.load(urlString: AppSettings.shared.homepage)
-                }
+                engine.ensureDocumentLoaded()
             }
             .onChange(of: engine.state.url) { newValue in
                 urlText = newValue?.absoluteString ?? urlText

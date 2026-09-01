@@ -24,6 +24,10 @@ class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.isHidden = false
 
         ExternalDisplayManager.shared.sceneConnected(screen: windowScene.screen)
+        // Before attaching the relay: it dispatches into the page's
+        // JavaScript context, which doesn't exist until something is
+        // loaded.
+        BrowserEngine.shared.ensureDocumentLoaded()
         InputRelay.shared.attach(to: BrowserEngine.shared.webView, toolbar: BrowserEngine.shared.toolbarWebView)
     }
 

@@ -117,6 +117,16 @@ final class BrowserEngine: NSObject, ObservableObject {
         webView.load(URLRequest(url: url))
     }
 
+    /// Guarantees the page has a live document. The input relay works by
+    /// dispatching into the page's JavaScript context, so with nothing
+    /// loaded there is nothing to dispatch into and the mouse looks dead
+    /// until the user happens to navigate somewhere.
+    func ensureDocumentLoaded() {
+        guard webView.url == nil else { return }
+        let homepage = AppSettings.shared.homepage.trimmingCharacters(in: .whitespacesAndNewlines)
+        load(urlString: homepage.isEmpty ? "about:blank" : homepage)
+    }
+
     func goBack() { webView.goBack() }
     func goForward() { webView.goForward() }
     func reload() { webView.reload() }

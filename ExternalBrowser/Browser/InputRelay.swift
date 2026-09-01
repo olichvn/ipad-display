@@ -296,7 +296,7 @@ final class InputRelay: ObservableObject {
 
         let js = """
         (function(){
-          var el = document.elementFromPoint(\(x), \(y)) || document.body;
+          var el = document.elementFromPoint(\(x), \(y)) || document.body || document.documentElement;
           if (!el) return;
           var dx = \(dx), dy = \(dy);
           var opts = {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y),
@@ -380,9 +380,16 @@ final class InputRelay: ObservableObject {
 
         let x = Int(point.x)
         let y = Int(point.y)
+        // Self-healing: if the document was replaced (or hadn't finished
+        // loading when the user script ran) the overlay helper won't
+        // exist, and every dispatch would silently throw — which looked
+        // like a completely dead mouse until a page happened to load.
         var js = """
         (function(){
-          var el = document.elementFromPoint(\(x), \(y)) || document.body;
+        try {
+          if (!window.__extbrowserSetCursor) { \(InputRelay.cursorBootstrapScript) }
+          var el = document.elementFromPoint(\(x), \(y)) || document.body || document.documentElement;
+          if (!el) return;
           var opts = {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y), button:\(button), shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)};
           el.dispatchEvent(new MouseEvent('\(type)', opts));
           if ('\(type)' === 'mousedown') {
@@ -404,6 +411,7 @@ final class InputRelay: ObservableObject {
         js += """
 
           if (window.__extbrowserSetCursor) window.__extbrowserSetCursor(\(x), \(y));
+        } catch (e) {}
         })();
         """
         target.evaluateJavaScript(js, completionHandler: nil)
@@ -423,6 +431,9 @@ final class InputRelay: ObservableObject {
       c.style.width = '0'; c.style.height = '0';
       c.style.zIndex = '2147483647';
       c.style.pointerEvents = 'none';
+      // Parked off-screen until the relay positions it, so a freshly
+      // loaded document never shows a stray arrow at the top-left.
+      c.style.transform = 'translate(-100px,-100px)';
       c.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" style="position:absolute;top:0;left:0;filter:drop-shadow(0 0 1px white)"><path d="M1 1 L1 15 L5 12 L8 18 L10.5 17 L7.5 11 L13 11 Z" fill="black"/></svg>';
       document.documentElement.appendChild(c);
       window.__extbrowserSetCursor = function(x, y){
