@@ -6,7 +6,6 @@ import SwiftUI
 struct ControllerView: View {
     @EnvironmentObject var engine: BrowserEngine
     @EnvironmentObject var display: ExternalDisplayManager
-    @Environment(\.openWindow) private var openWindow
 
     @State private var urlText: String = ""
     @FocusState private var urlFieldFocused: Bool
@@ -21,8 +20,7 @@ struct ControllerView: View {
                         LabeledContent("Resolution", value: "\(Int(display.pixelResolution.width)) × \(Int(display.pixelResolution.height))")
                         LabeledContent("Window Size", value: "\(Int(display.pointSize.width)) × \(Int(display.pointSize.height)) pt")
                     }
-                    Button("Open Browser Window") { openWindow(id: "browser") }
-                    Text("Drag the new window's title bar onto the external display to move it there — regular iPadOS windows are fully interactive with mouse/keyboard on any screen.")
+                    Text("Mouse and keyboard connected to the dock are relayed directly into the page on the external display.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
