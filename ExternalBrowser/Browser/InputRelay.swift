@@ -116,7 +116,10 @@ final class InputRelay {
 
     private func handleScroll(deltaX: CGFloat, deltaY: CGFloat) {
         guard let webView = webView else { return }
-        let sensitivity: CGFloat = 40
+        // Tuned down from an initial 40 — that made the wheel scroll the
+        // page far too fast (each tick reports a larger value than a
+        // typical analog-stick-style delta).
+        let sensitivity: CGFloat = 6
         var offset = webView.scrollView.contentOffset
         offset.x -= deltaX * sensitivity
         offset.y += deltaY * sensitivity
@@ -146,25 +149,30 @@ final class InputRelay {
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
+    /// Bootstraps the synthetic cursor overlay. Registered as a
+    /// WKUserScript (see BrowserEngine) so WebKit re-runs it on every
+    /// navigation automatically — a one-off evaluateJavaScript() call
+    /// only survives until the next page load wipes the DOM.
+    static let cursorBootstrapScript = """
+    (function(){
+      if (document.getElementById('__extbrowser_cursor')) return;
+      var c = document.createElement('div');
+      c.id = '__extbrowser_cursor';
+      c.style.position = 'fixed';
+      c.style.top = '0'; c.style.left = '0';
+      c.style.width = '0'; c.style.height = '0';
+      c.style.zIndex = '2147483647';
+      c.style.pointerEvents = 'none';
+      c.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" style="position:absolute;top:0;left:0;filter:drop-shadow(0 0 1px white)"><path d="M1 1 L1 15 L5 12 L8 18 L10.5 17 L7.5 11 L13 11 Z" fill="black"/></svg>';
+      document.documentElement.appendChild(c);
+      window.__extbrowserSetCursor = function(x, y){
+        c.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+      };
+    })();
+    """
+
     private func injectCursorScript() {
-        let js = """
-        (function(){
-          if (document.getElementById('__extbrowser_cursor')) return;
-          var c = document.createElement('div');
-          c.id = '__extbrowser_cursor';
-          c.style.position = 'fixed';
-          c.style.top = '0'; c.style.left = '0';
-          c.style.width = '0'; c.style.height = '0';
-          c.style.zIndex = '2147483647';
-          c.style.pointerEvents = 'none';
-          c.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" style="position:absolute;top:0;left:0;filter:drop-shadow(0 0 1px white)"><path d="M1 1 L1 15 L5 12 L8 18 L10.5 17 L7.5 11 L13 11 Z" fill="black"/></svg>';
-          document.documentElement.appendChild(c);
-          window.__extbrowserSetCursor = function(x, y){
-            c.style.transform = 'translate(' + x + 'px,' + y + 'px)';
-          };
-        })();
-        """
-        webView?.evaluateJavaScript(js, completionHandler: nil)
+        webView?.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
     }
 
     private func handleKey(keyCode: GCKeyCode, pressed: Bool) {

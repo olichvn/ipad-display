@@ -26,6 +26,16 @@ final class BrowserEngine: NSObject, ObservableObject {
         // background video/ad autoplay at full volume on load — wasted
         // battery and an unpleasant surprise on a shared monitor.
 
+        // Re-run on every navigation (not just once) — a page load
+        // replaces the DOM and would otherwise wipe the synthetic
+        // cursor InputRelay depends on.
+        let cursorScript = WKUserScript(
+            source: InputRelay.cursorBootstrapScript,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        configuration.userContentController.addUserScript(cursorScript)
+
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
