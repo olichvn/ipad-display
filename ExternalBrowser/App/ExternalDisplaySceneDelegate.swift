@@ -31,7 +31,7 @@ class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     /// Fires on resolution/mode changes so the published geometry (shown
     /// on the iPad controller) stays accurate.
-    func windowScene(_ windowScene: UIWindowScene, didUpdateCoordinateSpace previousCoordinateSpace: UICoordinateSpace, interfaceOrientation previousInterfaceOrientation: UIInterfaceOrientation, traitCollection previousTraitCollection: UITraitCollection) {
+    func windowScene(_ windowScene: UIWindowScene, didUpdate previousCoordinateSpace: UICoordinateSpace, interfaceOrientation previousInterfaceOrientation: UIInterfaceOrientation, traitCollection previousTraitCollection: UITraitCollection) {
         ExternalDisplayManager.shared.updateGeometry(for: windowScene.screen)
     }
 }
