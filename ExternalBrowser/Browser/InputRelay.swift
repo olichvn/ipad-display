@@ -1,6 +1,7 @@
 import GameController
 import WebKit
 import UIKit
+import Combine
 
 /// Reads raw mouse/keyboard input via the GameController framework and
 /// forwards it into the page as synthetic DOM events.
@@ -24,8 +25,19 @@ import UIKit
 /// correctly; that's expected to be irrelevant for the primary target
 /// use case (a Guacamole remote-desktop session, which just wants a raw
 /// mouse/keyboard event stream to relay onward).
-final class InputRelay {
+final class InputRelay: ObservableObject {
     static let shared = InputRelay()
+
+    // Diagnostics surfaced on the iPad controller. The build/reinstall
+    // loop is slow and none of this is observable from a debugger on the
+    // target device, so the app reports where the input chain breaks.
+    @Published private(set) var isAttached = false
+    @Published private(set) var mouseConnected = false
+    @Published private(set) var keyboardConnected = false
+    @Published private(set) var moveEvents = 0
+    @Published private(set) var scrollEvents = 0
+    @Published private(set) var keyEvents = 0
+    @Published private(set) var diagnostic: String = "not attached"
 
     private weak var webView: WKWebView?
     private weak var toolbarWebView: WKWebView?
@@ -65,17 +77,21 @@ final class InputRelay {
         toolbarWebView.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
         webView.evaluateJavaScript(InputRelay.keyboardBehaviorScript, completionHandler: nil)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(mouseConnected(_:)), name: .GCMouseDidConnect, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(mouseDisconnected(_:)), name: .GCMouseDidDisconnect, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardConnected(_:)), name: .GCKeyboardDidConnect, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDisconnected(_:)), name: .GCKeyboardDidDisconnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(mouseDidConnect(_:)), name: .GCMouseDidConnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(mouseDidDisconnect(_:)), name: .GCMouseDidDisconnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidConnect(_:)), name: .GCKeyboardDidConnect, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidDisconnect(_:)), name: .GCKeyboardDidDisconnect, object: nil)
 
-        if let existingMouse = GCMouse.mice().first {
+        let existingMice = GCMouse.mice()
+        if let existingMouse = existingMice.first {
             configure(mouse: existingMouse)
         }
         if let existingKeyboard = GCKeyboard.coalesced {
             configure(keyboard: existingKeyboard)
         }
+
+        isAttached = true
+        diagnostic = "attached; \(existingMice.count) mouse(s) at attach"
     }
 
     func detach() {
@@ -89,31 +105,44 @@ final class InputRelay {
         activeWebView = nil
         lastCursorHost = nil
         shiftDown = false; ctrlDown = false; altDown = false; metaDown = false
+        isAttached = false
+        diagnostic = "detached (external display gone)"
     }
 
-    @objc private func mouseConnected(_ note: Notification) {
+    @objc private func mouseDidConnect(_ note: Notification) {
         guard let m = note.object as? GCMouse else { return }
         configure(mouse: m)
     }
 
-    @objc private func mouseDisconnected(_ note: Notification) {
+    @objc private func mouseDidDisconnect(_ note: Notification) {
         mouse = nil
+        mouseConnected = false
+        diagnostic = "mouse disconnected"
     }
 
-    @objc private func keyboardConnected(_ note: Notification) {
+    @objc private func keyboardDidConnect(_ note: Notification) {
         guard let k = note.object as? GCKeyboard else { return }
         configure(keyboard: k)
     }
 
-    @objc private func keyboardDisconnected(_ note: Notification) {
+    @objc private func keyboardDidDisconnect(_ note: Notification) {
         keyboard = nil
+        keyboardConnected = false
     }
 
     // MARK: - Mouse
 
     private func configure(mouse: GCMouse) {
         self.mouse = mouse
-        guard let input = mouse.mouseInput else { return }
+        // Handlers must run on the main queue: they all end up calling
+        // evaluateJavaScript, and WKWebView may only be touched from the
+        // main thread — off-main calls fail silently.
+        mouse.handlerQueue = .main
+        mouseConnected = true
+        guard let input = mouse.mouseInput else {
+            diagnostic = "mouse has no mouseInput profile"
+            return
+        }
 
         input.mouseMovedHandler = { [weak self] _, deltaX, deltaY in
             self?.handleMouseMoved(deltaX: CGFloat(deltaX), deltaY: CGFloat(deltaY))
@@ -165,8 +194,12 @@ final class InputRelay {
     }
 
     private func handleMouseMoved(deltaX: CGFloat, deltaY: CGFloat) {
+        moveEvents += 1
         let size = canvasSize
-        guard size.width > 0, size.height > 0 else { return }
+        guard size.width > 0, size.height > 0 else {
+            diagnostic = "canvas size is zero — no display geometry"
+            return
+        }
 
         initializeCursorIfNeeded(in: CGRect(origin: .zero, size: size))
 
@@ -177,6 +210,7 @@ final class InputRelay {
         // GameController reports +Y as up; DOM/screen coordinates are +Y down.
         cursor.x = min(max(0, cursor.x + deltaX), size.width)
         cursor.y = min(max(0, cursor.y - deltaY), size.height)
+        diagnostic = "cursor \(Int(cursor.x)),\(Int(cursor.y)) in \(Int(size.width))x\(Int(size.height))"
         dispatchMouse(type: "mousemove", button: 0)
     }
 
@@ -252,6 +286,7 @@ final class InputRelay {
         }
         settleWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+        scrollEvents += 1
     }
 
     private func initializeCursorIfNeeded(in bounds: CGRect) {
@@ -342,7 +377,10 @@ final class InputRelay {
 
     private func configure(keyboard: GCKeyboard) {
         self.keyboard = keyboard
+        keyboard.handlerQueue = .main
+        keyboardConnected = true
         keyboard.keyboardInput?.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
+            self?.keyEvents += 1
             self?.handleKey(keyCode: keyCode, pressed: pressed)
         }
     }

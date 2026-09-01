@@ -7,6 +7,7 @@ struct ControllerView: View {
     @EnvironmentObject var engine: BrowserEngine
     @EnvironmentObject var display: ExternalDisplayManager
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var relay = InputRelay.shared
 
     @State private var urlText: String = ""
     @FocusState private var urlFieldFocused: Bool
@@ -49,6 +50,18 @@ struct ControllerView: View {
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }
+                }
+
+                Section("Input Diagnostics") {
+                    LabeledContent("Relay attached", value: relay.isAttached ? "Yes" : "No")
+                    LabeledContent("Mouse", value: relay.mouseConnected ? "Connected" : "Not connected")
+                    LabeledContent("Keyboard", value: relay.keyboardConnected ? "Connected" : "Not connected")
+                    LabeledContent("Move events", value: "\(relay.moveEvents)")
+                    LabeledContent("Scroll events", value: "\(relay.scrollEvents)")
+                    LabeledContent("Key events", value: "\(relay.keyEvents)")
+                    Text(relay.diagnostic)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                 }
 
                 Section("Address") {
