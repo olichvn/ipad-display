@@ -14,23 +14,43 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             .environmentObject(ExternalDisplayManager.shared)
 
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = UIHostingController(rootView: controller)
+        window.rootViewController = PointerLockingHostingController(rootView: controller)
         self.window = window
         window.makeKeyAndVisible()
     }
 }
 
-// Pointer lock (`prefersPointerLocked`) was tried here to stop the mouse
-// from also driving the iPad's own system pointer. It never engaged
-// reliably — Apple requires the scene to be full screen AND
-// foregroundActive, and with an external display attached plus a
-// sheet-capable SwiftUI hierarchy it ended up half-engaged: enough to
-// disturb the system pointer (status bar flashing dark on click, the
-// external-display indicator vanishing) but not enough to capture it,
-// which broke mouse input entirely on hardware.
-//
-// InputRelay instead scales raw GCMouse deltas by the ratio between the
-// external display and the iPad's own screen, so traversing the iPad's
-// screen traverses the whole external display and the tracked cursor
-// still reaches every edge. Trade-off: the iPad's own pointer stays
-// visible on the iPad screen.
+/// Captures the mouse so it stops driving the iPad's own system pointer.
+/// Without this the OS clamps that pointer to the iPad's screen and
+/// simply stops delivering GCMouse deltas once it hits an edge, so the
+/// tracked cursor on the external display gets stuck partway across —
+/// and stray clicks land on the iPad's own UI.
+///
+/// The critical piece is `childViewControllerForPointerLock`: UIKit asks
+/// the root view controller, but by default defers to a child if there
+/// is one. SwiftUI's NavigationView/Form build child controllers that
+/// don't request pointer lock, so an earlier version of this returned
+/// the wrong answer and lock never properly engaged — it disturbed the
+/// system pointer without capturing it. Returning nil keeps the decision
+/// here.
+final class PointerLockingHostingController<Content: View>: UIHostingController<Content> {
+    override var prefersPointerLocked: Bool {
+        AppSettings.shared.pointerLockEnabled
+    }
+
+    override var childViewControllerForPointerLock: UIViewController? { nil }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(pointerLockPreferenceChanged),
+            name: AppSettings.pointerLockPreferenceChanged,
+            object: nil
+        )
+    }
+
+    @objc private func pointerLockPreferenceChanged() {
+        setNeedsUpdateOfPrefersPointerLocked()
+    }
+}

@@ -193,6 +193,15 @@ extension BrowserEngine: WKScriptMessageHandler {
       bar.appendChild(url);
       document.documentElement.appendChild(bar);
 
+      // The bar is position:fixed and would otherwise cover the top of
+      // the page - scrolling fully to the top would leave the first 44px
+      // of content permanently hidden behind it.
+      var BAR_H = '44px';
+      function applyOffset(on){
+        if (document.body) { document.body.style.paddingTop = on ? BAR_H : ''; }
+      }
+      applyOffset(true);
+
       function send(action, value){
         if (window.webkit && window.webkit.messageHandlers.extBrowserBridge) {
           window.webkit.messageHandlers.extBrowserBridge.postMessage(value === undefined ? {action:action} : {action:action, value:value});
@@ -211,6 +220,7 @@ extension BrowserEngine: WKScriptMessageHandler {
       };
       window.__extbrowserSetToolbarVisible = function(visible){
         bar.style.display = visible ? 'flex' : 'none';
+        applyOffset(visible);
       };
     })();
     """

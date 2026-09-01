@@ -6,6 +6,7 @@ import SwiftUI
 struct ControllerView: View {
     @EnvironmentObject var engine: BrowserEngine
     @EnvironmentObject var display: ExternalDisplayManager
+    @ObservedObject private var settings = AppSettings.shared
 
     @State private var urlText: String = ""
     @FocusState private var urlFieldFocused: Bool
@@ -21,6 +22,11 @@ struct ControllerView: View {
                         LabeledContent("Window Size", value: "\(Int(display.pointSize.width)) × \(Int(display.pointSize.height)) pt")
                     }
                     Text("Mouse and keyboard connected to the dock are relayed directly into the page on the external display.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+
+                    Toggle("Capture Mouse", isOn: $settings.pointerLockEnabled)
+                    Text("Stops the mouse from also moving the iPad's own pointer, so the cursor can reach every edge of the external display. Turn off if the mouse stops responding.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
