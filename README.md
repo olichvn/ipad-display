@@ -30,6 +30,20 @@ Not yet built (waiting on Phase 1/2 hardware confirmation before continuing,
 per spec section 38): further Microsoft 365 / general web-compatibility
 testing pass, refined disconnect/reconnect polish.
 
+## Stable fallback
+
+Tag **`stable-1`** is a hardware-confirmed good build: mouse, keyboard,
+modifier keys, the external toolbar, and scrolling all verified working
+on the target iPad. If a later change misbehaves, go back to it:
+
+```bash
+git checkout stable-1
+```
+
+A copy of that build is also kept locally as
+`build-artifacts/ExternalBrowser-STABLE.ipa` — sideload it directly to
+recover without waiting for a rebuild.
+
 ## Security & battery notes
 
 - **App Transport Security is set to allow arbitrary loads** (plain HTTP,

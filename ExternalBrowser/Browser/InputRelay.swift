@@ -180,20 +180,68 @@ final class InputRelay {
         dispatchMouse(type: "mousemove", button: 0)
     }
 
-    private var lastScrollTime: CFTimeInterval = 0
     private var settleWorkItem: DispatchWorkItem?
 
+    /// Scrolling goes through the DOM as a real `wheel` event rather than
+    /// straight to the native scroll view. Moving contentOffset directly
+    /// meant the page's JavaScript never learned a scroll had happened,
+    /// so anything that handles its own wheel input — a Guacamole session
+    /// forwarding it to the remote desktop, or an ordinary scrollable
+    /// pane inside a page — was bypassed and the outer page scrolled
+    /// instead. Only if nothing consumes the event do we scroll: first
+    /// the nearest scrollable ancestor, then the page itself.
     private func handleScroll(deltaX: CGFloat, deltaY: CGFloat) {
-        guard let webView = webView else { return }
+        guard let (target, point) = target() else { return }
         // Low sensitivity + inverted from the initial attempt, per
         // hardware feedback (was both too fast and backwards).
         let sensitivity: CGFloat = 2
-        var offset = webView.scrollView.contentOffset
-        offset.x += deltaX * sensitivity
-        offset.y -= deltaY * sensitivity
-        offset.x = max(0, offset.x)
-        offset.y = max(0, offset.y)
-        webView.scrollView.setContentOffset(offset, animated: false)
+        let dx = deltaX * sensitivity
+        // DOM deltaY is positive when scrolling down, the opposite sign
+        // to the contentOffset arithmetic this replaced.
+        let dy = -deltaY * sensitivity
+        let x = Int(point.x)
+        let y = Int(point.y)
+
+        let js = """
+        (function(){
+          var el = document.elementFromPoint(\(x), \(y)) || document.body;
+          if (!el) return;
+          var dx = \(dx), dy = \(dy);
+          var opts = {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y),
+                      deltaX:dx, deltaY:dy, deltaMode:0};
+
+          var consumed = !el.dispatchEvent(new WheelEvent('wheel', opts));
+          if (!consumed) {
+            // Older handlers (some remote-desktop clients included) still
+            // listen for the legacy event instead of 'wheel'.
+            var legacy = new MouseEvent('mousewheel', opts);
+            try {
+              Object.defineProperty(legacy, 'wheelDelta', {get:function(){return -dy * 3;}});
+              Object.defineProperty(legacy, 'wheelDeltaY', {get:function(){return -dy * 3;}});
+            } catch (e) {}
+            consumed = !el.dispatchEvent(legacy);
+          }
+          if (consumed) return;
+
+          // Nothing handled it: scroll the nearest scrollable ancestor,
+          // falling back to the page.
+          var node = el;
+          while (node && node.nodeType === 1) {
+            var s = window.getComputedStyle(node);
+            var oy = s.overflowY, ox = s.overflowX;
+            var scrollableY = (oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight;
+            var scrollableX = (ox === 'auto' || ox === 'scroll') && node.scrollWidth > node.clientWidth;
+            if ((dy !== 0 && scrollableY) || (dx !== 0 && scrollableX)) {
+              node.scrollTop += dy;
+              node.scrollLeft += dx;
+              return;
+            }
+            node = node.parentElement;
+          }
+          window.scrollBy(dx, dy);
+        })();
+        """
+        target.evaluateJavaScript(js, completionHandler: nil)
 
         // WKWebView's tile-based rendering can leave stale/blank content
         // after a burst of rapid, code-driven (non-gesture) scroll
