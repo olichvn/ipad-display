@@ -58,7 +58,9 @@ final class InputRelay: ObservableObject {
     /// Which view is currently drawing the cursor overlay.
     private weak var lastCursorHost: WKWebView?
 
-    private var mouse: GCMouse?
+    /// Every connected mouse gets handlers, not just one: the device that
+    /// actually delivers events isn't reliably mice().first.
+    private var mice: [GCMouse] = []
     private var keyboard: GCKeyboard?
 
     private var shiftDown = false
@@ -82,23 +84,76 @@ final class InputRelay: ObservableObject {
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidConnect(_:)), name: .GCKeyboardDidConnect, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidDisconnect(_:)), name: .GCKeyboardDidDisconnect, object: nil)
 
-        let existingMice = GCMouse.mice()
-        if let existingMouse = existingMice.first {
-            configure(mouse: existingMouse)
-        }
+        // Configure every connected mouse, not just mice().first: the
+        // instance that actually delivers events isn't necessarily the
+        // first in that list (GCMouse.current may be a different object),
+        // and handlers attached to the wrong one simply never fire.
+        configureAllMice()
         if let existingKeyboard = GCKeyboard.coalesced {
             configure(keyboard: existingKeyboard)
         }
 
         isAttached = true
-        diagnostic = "attached; \(existingMice.count) mouse(s) at attach"
+    }
+
+    /// Re-scans input devices and scene state on demand. GameController
+    /// only delivers events to a foreground-active, full-screen scene, so
+    /// if no events arrive at all this reports whether the app actually
+    /// holds that state — which distinguishes "wrong device object" from
+    /// "the system isn't sending us anything".
+    func refreshDiagnostics() {
+        configureAllMice()
+
+        var parts: [String] = []
+        parts.append("mice=\(GCMouse.mice().count)")
+        parts.append("current=\(GCMouse.current == nil ? "no" : "yes")")
+        parts.append("hooked=\(mice.count)")
+        parts.append("input=\(mice.first?.mouseInput == nil ? "nil" : "ok")")
+        parts.append("kbd=\(GCKeyboard.coalesced == nil ? "no" : "yes")")
+
+        for scene in UIApplication.shared.connectedScenes {
+            let role = scene.session.role == .windowExternalDisplayNonInteractive ? "ext" : "pad"
+            let state: String
+            switch scene.activationState {
+            case .foregroundActive: state = "active"
+            case .foregroundInactive: state = "inactive"
+            case .background: state = "bg"
+            case .unattached: state = "unattached"
+            @unknown default: state = "?"
+            }
+            parts.append("\(role)=\(state)")
+
+            if scene.session.role == .windowApplication,
+               let windowScene = scene as? UIWindowScene,
+               let window = windowScene.windows.first {
+                let screen = windowScene.screen.bounds.size
+                let full = abs(window.frame.width - screen.width) < 2 && abs(window.frame.height - screen.height) < 2
+                parts.append("fullscreen=\(full ? "yes" : "no")")
+            }
+        }
+        diagnostic = parts.joined(separator: " ")
+    }
+
+    private func configureAllMice() {
+        var seen = 0
+        for mouse in GCMouse.mice() {
+            configure(mouse: mouse)
+            seen += 1
+        }
+        if let current = GCMouse.current, !mice.contains(where: { $0 === current }) {
+            configure(mouse: current)
+            seen += 1
+        }
+        if seen == 0 {
+            diagnostic = "no mouse visible to GameController"
+        }
     }
 
     func detach() {
-        mouse?.mouseInput?.mouseMovedHandler = nil
+        mice.forEach { $0.mouseInput?.mouseMovedHandler = nil }
         keyboard?.keyboardInput?.keyChangedHandler = nil
         NotificationCenter.default.removeObserver(self)
-        mouse = nil
+        mice.removeAll()
         keyboard = nil
         webView = nil
         toolbarWebView = nil
@@ -115,9 +170,11 @@ final class InputRelay: ObservableObject {
     }
 
     @objc private func mouseDidDisconnect(_ note: Notification) {
-        mouse = nil
-        mouseConnected = false
-        diagnostic = "mouse disconnected"
+        if let m = note.object as? GCMouse {
+            mice.removeAll { $0 === m }
+        }
+        mouseConnected = !mice.isEmpty
+        diagnostic = "mouse disconnected (\(mice.count) left)"
     }
 
     @objc private func keyboardDidConnect(_ note: Notification) {
@@ -133,7 +190,8 @@ final class InputRelay: ObservableObject {
     // MARK: - Mouse
 
     private func configure(mouse: GCMouse) {
-        self.mouse = mouse
+        guard !mice.contains(where: { $0 === mouse }) else { return }
+        mice.append(mouse)
         // Handlers must run on the main queue: they all end up calling
         // evaluateJavaScript, and WKWebView may only be touched from the
         // main thread — off-main calls fail silently.

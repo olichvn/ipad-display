@@ -22,6 +22,19 @@ struct ControllerView: View {
     var body: some View {
         NavigationView {
             Form {
+                // First section on purpose: the list can't be scrolled
+                // while the mouse is captured, so anything below the fold
+                // is unreachable.
+                Section("Input Diagnostics") {
+                    LabeledContent("Move events", value: "\(relay.moveEvents)")
+                    LabeledContent("Key events", value: "\(relay.keyEvents)")
+                    LabeledContent("Relay / mouse", value: "\(relay.isAttached ? "on" : "off") / \(relay.mouseConnected ? "on" : "off")")
+                    Text(relay.diagnostic)
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Button("Refresh") { relay.refreshDiagnostics() }
+                }
+
                 Section("External Display") {
                     LabeledContent("Status", value: display.isConnected ? "Connected" : "Disconnected")
                     if display.isConnected {
@@ -50,18 +63,6 @@ struct ControllerView: View {
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }
-                }
-
-                Section("Input Diagnostics") {
-                    LabeledContent("Relay attached", value: relay.isAttached ? "Yes" : "No")
-                    LabeledContent("Mouse", value: relay.mouseConnected ? "Connected" : "Not connected")
-                    LabeledContent("Keyboard", value: relay.keyboardConnected ? "Connected" : "Not connected")
-                    LabeledContent("Move events", value: "\(relay.moveEvents)")
-                    LabeledContent("Scroll events", value: "\(relay.scrollEvents)")
-                    LabeledContent("Key events", value: "\(relay.keyEvents)")
-                    Text(relay.diagnostic)
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
                 }
 
                 Section("Address") {
