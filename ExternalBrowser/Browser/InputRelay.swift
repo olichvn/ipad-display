@@ -28,11 +28,21 @@ final class InputRelay {
     static let shared = InputRelay()
 
     private weak var webView: WKWebView?
+    private weak var toolbarWebView: WKWebView?
+    /// Where synthetic keyboard input goes: whichever view was clicked
+    /// last, so typing lands in the address bar after clicking it.
+    private weak var activeWebView: WKWebView?
+
+    /// Cursor position in external-display coordinates (y measured from
+    /// the top of the toolbar, not the page).
     private var cursor: CGPoint = .zero
     /// Cursor starts unpositioned: at attach() time the web view hasn't
     /// been laid out yet, so its bounds are still zero and centring on
     /// them would just pin the cursor to the top-left corner.
     private var cursorInitialized = false
+
+    private var lastClickTime: CFTimeInterval = 0
+    private var lastClickPoint: CGPoint = .zero
 
     private var mouse: GCMouse?
     private var keyboard: GCKeyboard?
@@ -44,10 +54,13 @@ final class InputRelay {
 
     private init() {}
 
-    func attach(to webView: WKWebView) {
+    func attach(to webView: WKWebView, toolbar toolbarWebView: WKWebView) {
         self.webView = webView
+        self.toolbarWebView = toolbarWebView
+        self.activeWebView = webView
         cursorInitialized = false
         webView.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
+        toolbarWebView.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
         webView.evaluateJavaScript(InputRelay.keyboardBehaviorScript, completionHandler: nil)
 
         NotificationCenter.default.addObserver(self, selector: #selector(mouseConnected(_:)), name: .GCMouseDidConnect, object: nil)
@@ -70,6 +83,8 @@ final class InputRelay {
         mouse = nil
         keyboard = nil
         webView = nil
+        toolbarWebView = nil
+        activeWebView = nil
         shiftDown = false; ctrlDown = false; altDown = false; metaDown = false
     }
 
@@ -113,26 +128,42 @@ final class InputRelay {
         }
     }
 
+    /// Total interactive area: the page plus the toolbar strip above it.
+    private var canvasSize: CGSize {
+        guard let webView = webView else { return .zero }
+        let pageBounds = webView.bounds
+        return CGSize(width: pageBounds.width, height: pageBounds.height + toolbarOffset)
+    }
+
+    /// Height occupied by the toolbar web view, or 0 in full-screen mode.
+    private var toolbarOffset: CGFloat {
+        BrowserEngine.shared.state.isFullScreen ? 0 : BrowserEngine.toolbarHeight
+    }
+
+    /// Maps the cursor onto whichever web view it's over, converting to
+    /// that view's local coordinates.
+    private func target() -> (webView: WKWebView, point: CGPoint)? {
+        guard let webView = webView else { return nil }
+        let offset = toolbarOffset
+        if offset > 0, cursor.y < offset, let toolbar = toolbarWebView {
+            return (toolbar, CGPoint(x: cursor.x, y: cursor.y))
+        }
+        return (webView, CGPoint(x: cursor.x, y: cursor.y - offset))
+    }
+
     private func handleMouseMoved(deltaX: CGFloat, deltaY: CGFloat) {
-        guard let webView = webView else { return }
-        let bounds = webView.bounds
-        guard bounds.width > 0, bounds.height > 0 else { return }
+        let size = canvasSize
+        guard size.width > 0, size.height > 0 else { return }
 
-        initializeCursorIfNeeded(in: bounds)
+        initializeCursorIfNeeded(in: CGRect(origin: .zero, size: size))
 
-        // Without pointer lock the mouse still drives the iPad's own
-        // system pointer, which the OS clamps to the iPad's screen — once
-        // it hits an edge, no further deltas arrive in that direction.
-        // Scaling by the ratio between the two screens means traversing
-        // the iPad's screen traverses the whole external display, so the
-        // tracked cursor can still reach every edge.
-        let iPadBounds = UIScreen.main.bounds
-        let scaleX = iPadBounds.width > 0 ? bounds.width / iPadBounds.width : 1
-        let scaleY = iPadBounds.height > 0 ? bounds.height / iPadBounds.height : 1
-
+        // 1:1 with the physical mouse. (Deltas were briefly scaled by the
+        // external/iPad screen ratio to work around the OS clamping its
+        // own pointer at the iPad's screen edge; pointer lock removes that
+        // clamping, so scaling only made the cursor move too fast.)
         // GameController reports +Y as up; DOM/screen coordinates are +Y down.
-        cursor.x = min(max(0, cursor.x + deltaX * scaleX), bounds.width)
-        cursor.y = min(max(0, cursor.y - deltaY * scaleY), bounds.height)
+        cursor.x = min(max(0, cursor.x + deltaX), size.width)
+        cursor.y = min(max(0, cursor.y - deltaY), size.height)
         dispatchMouse(type: "mousemove", button: 0)
     }
 
@@ -169,12 +200,26 @@ final class InputRelay {
     }
 
     private func dispatchMouse(type: String, button: Int) {
-        guard let webView = webView else { return }
         // A click before any movement would otherwise land at (0,0).
-        initializeCursorIfNeeded(in: webView.bounds)
-        let x = Int(cursor.x)
-        let y = Int(cursor.y)
-        let js = """
+        initializeCursorIfNeeded(in: CGRect(origin: .zero, size: canvasSize))
+        guard let (target, point) = target() else { return }
+
+        var isDoubleClick = false
+        if type == "mousedown" {
+            let now = CACurrentMediaTime()
+            let moved = hypot(cursor.x - lastClickPoint.x, cursor.y - lastClickPoint.y)
+            isDoubleClick = (now - lastClickTime) < 0.4 && moved < 6
+            lastClickTime = now
+            lastClickPoint = cursor
+            activeWebView = target
+            // Keep the cursor drawn in one view only.
+            let other = (target === webView) ? toolbarWebView : webView
+            other?.evaluateJavaScript("window.__extbrowserSetCursor && window.__extbrowserSetCursor(-100,-100)", completionHandler: nil)
+        }
+
+        let x = Int(point.x)
+        let y = Int(point.y)
+        var js = """
         (function(){
           var el = document.elementFromPoint(\(x), \(y)) || document.body;
           var opts = {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y), button:\(button), shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)};
@@ -184,10 +229,23 @@ final class InputRelay {
             if (focusable) focusable.focus();
             el.dispatchEvent(new MouseEvent('click', opts));
           }
+        """
+        if isDoubleClick {
+            // Synthetic events don't trigger the browser's own
+            // double-click-selects-a-word behaviour, so do it by hand.
+            js += """
+
+              el.dispatchEvent(new MouseEvent('dblclick', opts));
+              var field = el.closest('input, textarea');
+              if (field && field.select) { field.select(); }
+            """
+        }
+        js += """
+
           if (window.__extbrowserSetCursor) window.__extbrowserSetCursor(\(x), \(y));
         })();
         """
-        webView.evaluateJavaScript(js, completionHandler: nil)
+        target.evaluateJavaScript(js, completionHandler: nil)
     }
 
     /// Bootstraps the synthetic cursor overlay. Registered as a
@@ -237,7 +295,7 @@ final class InputRelay {
     }
 
     private func dispatchKey(domKey: String, code: String, keyCode: Int, char: Character?, pressed: Bool) {
-        guard let webView = webView else { return }
+        guard let webView = activeWebView ?? webView else { return }
         let escapedKey = domKey.replacingOccurrences(of: "'", with: "\\'")
         let type = pressed ? "keydown" : "keyup"
         // KeyboardEvent's constructor accepts `code` directly, but

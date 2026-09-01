@@ -6,16 +6,22 @@ import WebKit
 /// No native SwiftUI toolbar here on purpose — this scene accepts no
 /// touch/mouse input from the OS (see ExternalDisplaySceneDelegate), so
 /// a native toolbar would be permanently unreachable. Navigation
-/// controls instead live inside the page's own DOM (see
-/// BrowserEngine.toolbarBootstrapScript), where InputRelay's synthetic
+/// controls instead live in their own small web view stacked above the
+/// page (see BrowserEngine.toolbarHTML), where InputRelay's synthetic
 /// mouse/keyboard events can actually reach them.
 struct BrowserView: View {
     @EnvironmentObject var engine: BrowserEngine
 
     var body: some View {
-        WebViewRepresentable(webView: engine.webView)
-            .ignoresSafeArea()
-            .background(Color.black)
+        VStack(spacing: 0) {
+            if !engine.state.isFullScreen {
+                WebViewRepresentable(webView: engine.toolbarWebView)
+                    .frame(height: BrowserEngine.toolbarHeight)
+            }
+            WebViewRepresentable(webView: engine.webView)
+        }
+        .ignoresSafeArea()
+        .background(Color.black)
     }
 }
 

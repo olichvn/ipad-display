@@ -11,6 +11,11 @@ final class BrowserEngine: NSObject, ObservableObject {
     @Published private(set) var state = BrowserState()
 
     let webView: WKWebView
+    /// Small web view hosting the navigation toolbar. Separate from the
+    /// page so it can be clicked/typed into by InputRelay's synthetic
+    /// events (a native SwiftUI toolbar is unreachable on this scene).
+    let toolbarWebView: WKWebView
+    static let toolbarHeight: CGFloat = 44
 
     private var progressObservation: NSKeyValueObservation?
     private var titleObservation: NSKeyValueObservation?
@@ -28,8 +33,8 @@ final class BrowserEngine: NSObject, ObservableObject {
 
         // Re-run on every navigation (not just once) — a page load
         // replaces the DOM and would otherwise wipe the synthetic
-        // cursor / toolbar InputRelay and this class depend on.
-        for source in [InputRelay.cursorBootstrapScript, InputRelay.keyboardBehaviorScript, BrowserEngine.toolbarBootstrapScript] {
+        // cursor InputRelay depends on.
+        for source in [InputRelay.cursorBootstrapScript, InputRelay.keyboardBehaviorScript] {
             let script = WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
             configuration.userContentController.addUserScript(script)
         }
@@ -38,12 +43,28 @@ final class BrowserEngine: NSObject, ObservableObject {
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
 
+        // The toolbar lives in its own small web view stacked ABOVE the
+        // page rather than as an overlay inside it. An in-page fixed bar
+        // covered the top of every site, and padding the body can't fix
+        // that: a page's own position:fixed header (google.com has one)
+        // ignores body padding and still renders underneath. Giving the
+        // toolbar its own view means the page simply never extends under
+        // it. It's browser chrome, not a second browsing context — still
+        // exactly one page-hosting web view.
+        let toolbarConfiguration = WKWebViewConfiguration()
+        let toolbarWebView = WKWebView(frame: .zero, configuration: toolbarConfiguration)
+        toolbarWebView.scrollView.isScrollEnabled = false
+        toolbarWebView.scrollView.contentInsetAdjustmentBehavior = .never
+
         self.webView = webView
+        self.toolbarWebView = toolbarWebView
         super.init()
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        webView.configuration.userContentController.add(self, name: "extBrowserBridge")
+        configuration.userContentController.add(self, name: "extBrowserBridge")
+        toolbarConfiguration.userContentController.add(self, name: "extBrowserBridge")
+        toolbarWebView.loadHTMLString(BrowserEngine.toolbarHTML, baseURL: nil)
         observeWebView()
     }
 
@@ -68,17 +89,11 @@ final class BrowserEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Pushes the current URL/full-screen state into the in-page toolbar
-    /// InputRelay's synthetic input can actually reach (see
-    /// toolbarBootstrapScript below).
+    /// Pushes the current URL into the toolbar web view's address field.
     private func syncToolbarURL() {
         guard let urlString = state.url?.absoluteString else { return }
         let escaped = urlString.replacingOccurrences(of: "'", with: "\\'")
-        webView.evaluateJavaScript("window.__extbrowserSetURL && window.__extbrowserSetURL('\(escaped)')", completionHandler: nil)
-    }
-
-    private func syncToolbarVisibility() {
-        webView.evaluateJavaScript("window.__extbrowserSetToolbarVisible && window.__extbrowserSetToolbarVisible(\(!state.isFullScreen))", completionHandler: nil)
+        toolbarWebView.evaluateJavaScript("window.__extbrowserSetURL && window.__extbrowserSetURL('\(escaped)')", completionHandler: nil)
     }
 
     // MARK: - Navigation
@@ -99,12 +114,10 @@ final class BrowserEngine: NSObject, ObservableObject {
 
     func toggleFullScreen() {
         state.isFullScreen.toggle()
-        syncToolbarVisibility()
     }
 
     func setFullScreen(_ value: Bool) {
         state.isFullScreen = value
-        syncToolbarVisibility()
     }
 
     func clearWebsiteData(completion: @escaping () -> Void) {
@@ -144,10 +157,8 @@ final class BrowserEngine: NSObject, ObservableObject {
 // MARK: - WKScriptMessageHandler
 
 extension BrowserEngine: WKScriptMessageHandler {
-    /// Receives messages from the in-page toolbar (toolbarBootstrapScript)
-    /// so its buttons/URL field — reachable by InputRelay's synthetic
-    /// input because they live in the page's own DOM — can drive real
-    /// navigation.
+    /// Receives messages from the toolbar web view so its buttons and
+    /// URL field can drive real navigation.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         switch action {
@@ -160,69 +171,41 @@ extension BrowserEngine: WKScriptMessageHandler {
         }
     }
 
-    /// In-page toolbar: back/forward/reload + an editable URL field, all
-    /// reachable via InputRelay's synthetic click/keyboard events since
-    /// (unlike a native SwiftUI toolbar) it's part of the page's own DOM.
-    /// Talks back to Swift via the "extBrowserBridge" message handler.
-    static let toolbarBootstrapScript = """
-    (function(){
-      if (document.getElementById('__extbrowser_toolbar')) return;
-      var bar = document.createElement('div');
-      bar.id = '__extbrowser_toolbar';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;height:44px;background:rgba(28,28,30,0.92);display:flex;align-items:center;padding:0 8px;gap:8px;z-index:2147483646;font-family:-apple-system,sans-serif;';
-
-      function makeButton(label){
-        var b = document.createElement('button');
-        b.textContent = label;
-        b.style.cssText = 'width:36px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;';
-        return b;
-      }
-
-      var back = makeButton('\\u25C0');
-      var fwd = makeButton('\\u25B6');
-      var reload = makeButton('\\u21BB');
-      var url = document.createElement('input');
-      url.id = '__eb_url';
-      url.type = 'text';
-      url.value = location.href;
-      url.style.cssText = 'flex:1;height:32px;border-radius:6px;border:none;padding:0 10px;font-size:15px;';
-
-      bar.appendChild(back);
-      bar.appendChild(fwd);
-      bar.appendChild(reload);
-      bar.appendChild(url);
-      document.documentElement.appendChild(bar);
-
-      // The bar is position:fixed and would otherwise cover the top of
-      // the page - scrolling fully to the top would leave the first 44px
-      // of content permanently hidden behind it.
-      var BAR_H = '44px';
-      function applyOffset(on){
-        if (document.body) { document.body.style.paddingTop = on ? BAR_H : ''; }
-      }
-      applyOffset(true);
-
-      function send(action, value){
-        if (window.webkit && window.webkit.messageHandlers.extBrowserBridge) {
-          window.webkit.messageHandlers.extBrowserBridge.postMessage(value === undefined ? {action:action} : {action:action, value:value});
+    /// Standalone document for the toolbar web view: back/forward/reload
+    /// plus an editable URL field. Reachable via InputRelay's synthetic
+    /// click/keyboard events because it's real DOM (a native SwiftUI
+    /// toolbar would be unreachable on this input-less scene). Talks back
+    /// to Swift via the "extBrowserBridge" message handler.
+    static let toolbarHTML = """
+    <!DOCTYPE html>
+    <html>
+    <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+    <body style="margin:0;height:44px;background:#1c1c1e;display:flex;align-items:center;padding:0 8px;gap:8px;font-family:-apple-system,sans-serif;overflow:hidden;">
+      <button id="back" style="width:36px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;">&#9664;</button>
+      <button id="fwd" style="width:36px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;">&#9654;</button>
+      <button id="reload" style="width:36px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;">&#8635;</button>
+      <input id="url" type="text" spellcheck="false" autocomplete="off"
+             style="flex:1;height:32px;border-radius:6px;border:none;padding:0 10px;font-size:15px;">
+      <script>
+        function send(action, value){
+          if (window.webkit && window.webkit.messageHandlers.extBrowserBridge) {
+            window.webkit.messageHandlers.extBrowserBridge.postMessage(
+              value === undefined ? {action:action} : {action:action, value:value});
+          }
         }
-      }
-
-      back.addEventListener('click', function(){ send('back'); });
-      fwd.addEventListener('click', function(){ send('forward'); });
-      reload.addEventListener('click', function(){ send('reload'); });
-      url.addEventListener('keydown', function(e){
-        if (e.key === 'Enter') { send('navigate', url.value); }
-      });
-
-      window.__extbrowserSetURL = function(newURL){
-        if (document.activeElement !== url) { url.value = newURL; }
-      };
-      window.__extbrowserSetToolbarVisible = function(visible){
-        bar.style.display = visible ? 'flex' : 'none';
-        applyOffset(visible);
-      };
-    })();
+        var url = document.getElementById('url');
+        document.getElementById('back').addEventListener('click', function(){ send('back'); });
+        document.getElementById('fwd').addEventListener('click', function(){ send('forward'); });
+        document.getElementById('reload').addEventListener('click', function(){ send('reload'); });
+        url.addEventListener('keydown', function(e){
+          if (e.key === 'Enter') { send('navigate', url.value); }
+        });
+        window.__extbrowserSetURL = function(newURL){
+          if (document.activeElement !== url) { url.value = newURL; }
+        };
+      </script>
+    </body>
+    </html>
     """
 }
 
@@ -240,7 +223,7 @@ extension BrowserEngine: WKNavigationDelegate {
         state.canGoBack = webView.canGoBack
         state.canGoForward = webView.canGoForward
         syncToolbarURL()
-        syncToolbarVisibility()
+
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

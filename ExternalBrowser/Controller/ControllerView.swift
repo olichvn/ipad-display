@@ -72,6 +72,12 @@ struct ControllerView: View {
                 }
             }
             .navigationTitle("External Browser")
+            // The mouse wheel reaches this list as well as the page on the
+            // external display, so it would scroll in the background while
+            // browsing. Lock it while the mouse is captured — the "Capture
+            // Mouse" toggle sits in the first section, so it stays
+            // reachable to undo this without scrolling.
+            .scrollDisabled(display.isConnected && settings.pointerLockEnabled)
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }

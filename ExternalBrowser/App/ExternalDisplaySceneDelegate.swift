@@ -24,7 +24,7 @@ class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.isHidden = false
 
         ExternalDisplayManager.shared.sceneConnected(screen: windowScene.screen)
-        InputRelay.shared.attach(to: BrowserEngine.shared.webView)
+        InputRelay.shared.attach(to: BrowserEngine.shared.webView, toolbar: BrowserEngine.shared.toolbarWebView)
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
