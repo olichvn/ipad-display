@@ -33,6 +33,10 @@ struct ControllerView: View {
                         .font(.system(.footnote, design: .monospaced))
                         .foregroundColor(.secondary)
                     Button("Refresh") { relay.refreshDiagnostics() }
+                    Button("Re-apply Mouse Capture") {
+                        NotificationCenter.default.post(name: AppSettings.pointerLockPreferenceChanged, object: nil)
+                        relay.refreshDiagnostics()
+                    }
                 }
 
                 Section("External Display") {
