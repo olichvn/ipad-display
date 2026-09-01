@@ -31,13 +31,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 final class PointerLockingHostingController<Content: View>: UIHostingController<Content> {
     override var prefersPointerLocked: Bool { true }
 
-    // Presenting anything on top (e.g. the Settings sheet) makes UIKit
-    // drop pointer lock, since the presented content doesn't request it.
-    // It isn't automatically re-requested on dismiss, so the mouse would
-    // stay stuck driving the (unused) system pointer forever after the
-    // first time Settings was opened. Re-assert on every reappearance.
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        setNeedsUpdateOfPrefersPointerLocked()
-    }
+    // NOTE: re-asserting this on viewDidAppear (to recover pointer lock
+    // after the Settings sheet drops it) caused a worse regression —
+    // interference with the iPad's own system UI (status bar glitching,
+    // the external-display indicator disappearing on click). Reverted;
+    // the known limitation for now is that opening Settings breaks
+    // mouse control until the app is relaunched.
 }
