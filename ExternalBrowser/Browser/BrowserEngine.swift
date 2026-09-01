@@ -52,6 +52,16 @@ final class BrowserEngine: NSObject, ObservableObject {
         // it. It's browser chrome, not a second browsing context — still
         // exactly one page-hosting web view.
         let toolbarConfiguration = WKWebViewConfiguration()
+        // Same user scripts as the page: the cursor overlay must exist in
+        // this document too, or the pointer disappears when it moves over
+        // the toolbar. Registering them here (rather than evaluating once
+        // at attach time) means they survive the initial load — an
+        // evaluateJavaScript call racing loadHTMLString is discarded when
+        // the new document commits.
+        for source in [InputRelay.cursorBootstrapScript, InputRelay.keyboardBehaviorScript] {
+            let script = WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+            toolbarConfiguration.userContentController.addUserScript(script)
+        }
         let toolbarWebView = WKWebView(frame: .zero, configuration: toolbarConfiguration)
         toolbarWebView.scrollView.isScrollEnabled = false
         toolbarWebView.scrollView.contentInsetAdjustmentBehavior = .never

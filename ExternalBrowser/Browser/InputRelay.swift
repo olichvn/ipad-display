@@ -43,6 +43,8 @@ final class InputRelay {
 
     private var lastClickTime: CFTimeInterval = 0
     private var lastClickPoint: CGPoint = .zero
+    /// Which view is currently drawing the cursor overlay.
+    private weak var lastCursorHost: WKWebView?
 
     private var mouse: GCMouse?
     private var keyboard: GCKeyboard?
@@ -85,6 +87,7 @@ final class InputRelay {
         webView = nil
         toolbarWebView = nil
         activeWebView = nil
+        lastCursorHost = nil
         shiftDown = false; ctrlDown = false; altDown = false; metaDown = false
     }
 
@@ -129,7 +132,17 @@ final class InputRelay {
     }
 
     /// Total interactive area: the page plus the toolbar strip above it.
+    ///
+    /// Prefers the external display's own size, which is known as soon as
+    /// the scene connects. Deriving this from webView.bounds alone meant
+    /// every mouse event was dropped until some later layout pass gave
+    /// the view a non-zero size — in practice the mouse stayed dead until
+    /// a page was loaded from the iPad.
     private var canvasSize: CGSize {
+        let screenSize = ExternalDisplayManager.shared.pointSize
+        if screenSize.width > 0, screenSize.height > 0 {
+            return screenSize
+        }
         guard let webView = webView else { return .zero }
         let pageBounds = webView.bounds
         return CGSize(width: pageBounds.width, height: pageBounds.height + toolbarOffset)
@@ -204,6 +217,16 @@ final class InputRelay {
         initializeCursorIfNeeded(in: CGRect(origin: .zero, size: canvasSize))
         guard let (target, point) = target() else { return }
 
+        // Keep the cursor drawn in exactly one view: when it crosses
+        // between the toolbar and the page, park the old view's arrow
+        // off-screen so it doesn't linger there.
+        if lastCursorHost !== target {
+            lastCursorHost?.evaluateJavaScript(
+                "window.__extbrowserSetCursor && window.__extbrowserSetCursor(-100,-100)",
+                completionHandler: nil)
+            lastCursorHost = target
+        }
+
         var isDoubleClick = false
         if type == "mousedown" {
             let now = CACurrentMediaTime()
@@ -212,9 +235,6 @@ final class InputRelay {
             lastClickTime = now
             lastClickPoint = cursor
             activeWebView = target
-            // Keep the cursor drawn in one view only.
-            let other = (target === webView) ? toolbarWebView : webView
-            other?.evaluateJavaScript("window.__extbrowserSetCursor && window.__extbrowserSetCursor(-100,-100)", completionHandler: nil)
         }
 
         let x = Int(point.x)
