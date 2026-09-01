@@ -1,18 +1,19 @@
 import UIKit
-import SwiftUI
 import Combine
 
-/// Watches for an external display (USB-C / DisplayPort Alt Mode monitor)
-/// and owns the dedicated UIWindow shown on it. The external window is
-/// entirely separate from the iPad's own window/scene: it is never a
-/// mirror of the iPad UI, it hosts its own SwiftUI hierarchy (BrowserView).
+/// Published status about the external display, plus a weak reference to
+/// its UIWindow (owned by ExternalDisplaySceneDelegate, not here) so other
+/// code — e.g. presenting a JS alert on the right screen — can find it.
 ///
-/// Uses the classic UIScreen connect/disconnect notifications plus a
-/// screen-owned UIWindow rather than a UIWindowScene external-display
-/// role. This is the longest-standing, most broadly compatible public
-/// API for driving a second interactive screen and is the safest choice
-/// to validate first on real hardware (see Phase 1 proof-of-concept).
-final class ExternalDisplayManager: NSObject, ObservableObject {
+/// The window itself is created/destroyed by ExternalDisplaySceneDelegate
+/// in response to genuine UIWindowScene connect/disconnect lifecycle
+/// events for the `.windowExternalDisplayNonInteractive` role. An earlier
+/// version of this file drove a plain UIScreen + UIWindow(frame:) instead
+/// (no scene role at all) — on real hardware that fell back to the OS's
+/// automatic screen mirroring instead of giving the app its own external
+/// window, which is exactly the failure mode the scene-role API exists
+/// to avoid.
+final class ExternalDisplayManager: ObservableObject {
     static let shared = ExternalDisplayManager()
 
     @Published private(set) var isConnected: Bool = false
@@ -23,59 +24,13 @@ final class ExternalDisplayManager: NSObject, ObservableObject {
     /// coordinate space the external UIWindow actually lays out in.
     @Published private(set) var pointSize: CGSize = .zero
 
-    private(set) var externalWindow: UIWindow?
-    private var started = false
+    private(set) weak var externalWindow: UIWindow?
 
-    private override init() { super.init() }
+    private init() {}
 
-    func start() {
-        guard !started else { return }
-        started = true
-
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleScreenConnect(_:)),
-            name: UIScreen.didConnectNotification, object: nil)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleScreenDisconnect(_:)),
-            name: UIScreen.didDisconnectNotification, object: nil)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleModeChange(_:)),
-            name: UIScreen.modeDidChangeNotification, object: nil)
-
-        // If a display was already attached before the app finished
-        // launching (e.g. iPad was already docked), pick it up now.
-        if let existing = UIScreen.screens.first(where: { $0 != UIScreen.main }) {
-            attach(to: existing)
-        }
-    }
-
-    @objc private func handleScreenConnect(_ note: Notification) {
-        guard let screen = note.object as? UIScreen else { return }
-        attach(to: screen)
-    }
-
-    @objc private func handleScreenDisconnect(_ note: Notification) {
-        guard let screen = note.object as? UIScreen, screen === externalWindow?.screen else { return }
-        detach()
-    }
-
-    @objc private func handleModeChange(_ note: Notification) {
-        guard let screen = note.object as? UIScreen, screen === externalWindow?.screen else { return }
-        updatePublishedGeometry(for: screen)
-    }
-
-    private func attach(to screen: UIScreen) {
-        selectNativeMode(for: screen)
-
-        let window = UIWindow(frame: screen.bounds)
-        window.screen = screen
-        window.rootViewController = UIHostingController(
-            rootView: BrowserView().environmentObject(BrowserEngine.shared)
-        )
-        window.isHidden = false
+    func sceneConnected(window: UIWindow, screen: UIScreen) {
         externalWindow = window
-
-        updatePublishedGeometry(for: screen)
+        updateGeometry(for: screen)
         displayName = "External Display"
         isConnected = true
 
@@ -88,8 +43,7 @@ final class ExternalDisplayManager: NSObject, ObservableObject {
         }
     }
 
-    private func detach() {
-        externalWindow?.isHidden = true
+    func sceneDisconnected() {
         externalWindow = nil
         isConnected = false
         displayName = ""
@@ -97,22 +51,8 @@ final class ExternalDisplayManager: NSObject, ObservableObject {
         pointSize = .zero
     }
 
-    /// Picks the highest-resolution mode the display reports rather than
-    /// hardcoding any resolution, per the requirement to use the
-    /// monitor's own native/optimal geometry.
-    private func selectNativeMode(for screen: UIScreen) {
-        guard let best = screen.availableModes.max(by: {
-            $0.size.width * $0.size.height < $1.size.width * $1.size.height
-        }) else { return }
-        if screen.currentMode?.size != best.size {
-            screen.currentMode = best
-        }
-        externalWindow?.frame = screen.bounds
-    }
-
-    private func updatePublishedGeometry(for screen: UIScreen) {
+    func updateGeometry(for screen: UIScreen) {
         pixelResolution = screen.currentMode?.size ?? screen.bounds.size
         pointSize = screen.bounds.size
-        externalWindow?.frame = screen.bounds
     }
 }

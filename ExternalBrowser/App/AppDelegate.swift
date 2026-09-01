@@ -10,6 +10,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     // MARK: UISceneSession Lifecycle
 
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
-        UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
+        let name = connectingSceneSession.role == .windowExternalDisplayNonInteractive
+            ? "External Display" : "Default Configuration"
+        return UISceneConfiguration(name: name, sessionRole: connectingSceneSession.role)
     }
 }

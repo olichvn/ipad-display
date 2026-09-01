@@ -19,8 +19,5 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.rootViewController = UIHostingController(rootView: controller)
         self.window = window
         window.makeKeyAndVisible()
-
-        // Begin watching for an external display now that the app is up.
-        ExternalDisplayManager.shared.start()
     }
 }
