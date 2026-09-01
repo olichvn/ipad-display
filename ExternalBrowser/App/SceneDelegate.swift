@@ -30,4 +30,14 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 /// what InputRelay actually needs.
 final class PointerLockingHostingController<Content: View>: UIHostingController<Content> {
     override var prefersPointerLocked: Bool { true }
+
+    // Presenting anything on top (e.g. the Settings sheet) makes UIKit
+    // drop pointer lock, since the presented content doesn't request it.
+    // It isn't automatically re-requested on dismiss, so the mouse would
+    // stay stuck driving the (unused) system pointer forever after the
+    // first time Settings was opened. Re-assert on every reappearance.
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        setNeedsUpdateOfPrefersPointerLocked()
+    }
 }

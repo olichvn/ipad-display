@@ -197,28 +197,36 @@ final class InputRelay {
 
     private func handleKey(keyCode: GCKeyCode, pressed: Bool) {
         if let modifier = KeyCodeMap.modifier(for: keyCode) {
-            switch modifier {
+            switch modifier.kind {
             case .shift: shiftDown = pressed
             case .control: ctrlDown = pressed
             case .alt: altDown = pressed
             case .meta: metaDown = pressed
             }
-            dispatchKey(domKey: modifier.domKey, char: nil, pressed: pressed)
+            dispatchKey(domKey: modifier.domKey, code: modifier.code, keyCode: modifier.keyCode, char: nil, pressed: pressed)
             return
         }
         guard let mapped = KeyCodeMap.map(keyCode, shift: shiftDown) else { return }
-        dispatchKey(domKey: mapped.domKey, char: pressed ? mapped.char : nil, pressed: pressed)
+        dispatchKey(domKey: mapped.domKey, code: mapped.code, keyCode: mapped.keyCode, char: pressed ? mapped.char : nil, pressed: pressed)
     }
 
-    private func dispatchKey(domKey: String, char: Character?, pressed: Bool) {
+    private func dispatchKey(domKey: String, code: String, keyCode: Int, char: Character?, pressed: Bool) {
         guard let webView = webView else { return }
         let escapedKey = domKey.replacingOccurrences(of: "'", with: "\\'")
         let type = pressed ? "keydown" : "keyup"
+        // KeyboardEvent's constructor accepts `code` directly, but
+        // `keyCode`/`which` are read-only derived properties on modern
+        // engines and silently ignored if passed in the init dict — force
+        // them with defineProperty instead, since consumers like
+        // Guacamole's keyboard handling check the legacy numeric codes
+        // as well as (or instead of) `key`.
         var js = """
         (function(){
           var el = document.activeElement || document.body;
-          var opts = {key:'\(escapedKey)', bubbles:true, cancelable:true, shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)};
-          el.dispatchEvent(new KeyboardEvent('\(type)', opts));
+          var ev = new KeyboardEvent('\(type)', {key:'\(escapedKey)', code:'\(code)', bubbles:true, cancelable:true, shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)});
+          Object.defineProperty(ev, 'keyCode', {get:function(){return \(keyCode);}});
+          Object.defineProperty(ev, 'which', {get:function(){return \(keyCode);}});
+          el.dispatchEvent(ev);
         """
         if pressed, let char = char {
             let escapedChar = String(char).replacingOccurrences(of: "'", with: "\\'")
