@@ -55,3 +55,4 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ipaddisplay.ExternalBrowser
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

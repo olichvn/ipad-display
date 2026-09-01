@@ -20,11 +20,14 @@ final class ExternalDisplayManager: ObservableObject {
         displayName = "External Display"
         isConnected = true
 
-        let settings = AppSettings.shared
-        if BrowserEngine.shared.state.url == nil, settings.autoActivateBrowser {
-            BrowserEngine.shared.load(urlString: settings.homepage)
-        }
-        if settings.startInFullScreen {
+        // Always load the homepage, rather than only when "automatically
+        // activate browser" is set: the page needs a live document as
+        // soon as the display is connected, both so there's something to
+        // look at and because the input relay dispatches into that
+        // document's JavaScript context.
+        BrowserEngine.shared.ensureDocumentLoaded()
+
+        if AppSettings.shared.startInFullScreen {
             BrowserEngine.shared.setFullScreen(true)
         }
     }
