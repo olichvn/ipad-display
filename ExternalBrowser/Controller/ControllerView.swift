@@ -35,6 +35,20 @@ struct ControllerView: View {
                     Text("Stops the mouse from also moving the iPad's own pointer, so the cursor can reach every edge of the external display. Turn off if the mouse stops responding.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
+
+                    // Kept in this first section so it stays reachable by
+                    // touch: the list can't be scrolled while the mouse is
+                    // captured, which put the copy further down out of
+                    // reach.
+                    Button(engine.state.isFullScreen ? "Exit Full Screen" : "Full Screen") {
+                        engine.toggleFullScreen()
+                    }
+
+                    if mouseCaptured {
+                        Text("From the external keyboard: ⌘⇧F toggles full screen, ⌘⇧M toggles mouse capture.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Section("Address") {
@@ -78,10 +92,6 @@ struct ControllerView: View {
                         }
                     }
                     .buttonStyle(.bordered)
-
-                    Button(engine.state.isFullScreen ? "Exit Full Screen" : "Full Screen") {
-                        engine.toggleFullScreen()
-                    }
                 }
 
                 Section {

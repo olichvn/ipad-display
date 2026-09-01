@@ -359,6 +359,14 @@ final class InputRelay {
             return
         }
         guard let mapped = KeyCodeMap.map(keyCode, shift: shiftDown) else { return }
+
+        // Command+Shift+F / +M are handled by the app itself (full screen,
+        // capture toggle) — don't also send them to the page or the remote
+        // session behind it.
+        if metaDown, shiftDown, mapped.code == "KeyF" || mapped.code == "KeyM" {
+            return
+        }
+
         dispatchKey(domKey: mapped.domKey, code: mapped.code, keyCode: mapped.keyCode, char: pressed ? mapped.char : nil, pressed: pressed)
     }
 

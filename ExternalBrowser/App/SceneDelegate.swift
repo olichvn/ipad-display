@@ -67,8 +67,33 @@ final class PointerLockingHostingController<Content: View>: UIHostingController<
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if handleAppShortcut(presses) { return }
         guard !swallowsHardwareKeys else { return }
         super.pressesBegan(presses, with: event)
+    }
+
+    /// A couple of shortcuts survive the swallow above, so the browser can
+    /// be driven entirely from the external keyboard without reaching for
+    /// the iPad. Deliberately Command+Shift combinations: a remote Linux
+    /// session uses Control/Alt, so these are unlikely to collide with
+    /// anything being typed into it.
+    private func handleAppShortcut(_ presses: Set<UIPress>) -> Bool {
+        for press in presses {
+            guard let key = press.key else { continue }
+            let mods = key.modifierFlags
+            guard mods.contains(.command), mods.contains(.shift) else { continue }
+            switch key.charactersIgnoringModifiers.lowercased() {
+            case "f":
+                BrowserEngine.shared.toggleFullScreen()
+                return true
+            case "m":
+                AppSettings.shared.pointerLockEnabled.toggle()
+                return true
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
