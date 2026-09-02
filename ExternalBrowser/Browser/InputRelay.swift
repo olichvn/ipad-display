@@ -27,7 +27,13 @@ import UIKit
 final class InputRelay {
     static let shared = InputRelay()
 
-    private weak var webView: WKWebView?
+    /// The page view is looked up live rather than captured at attach
+    /// time, so switching tabs retargets input automatically with no
+    /// re-attach. `attached` records whether a display is present at all.
+    private var attached = false
+    private var webView: WKWebView? {
+        attached ? BrowserEngine.shared.webView : nil
+    }
     private weak var toolbarWebView: WKWebView?
     /// Where synthetic keyboard input goes: whichever view was clicked
     /// last, so typing lands in the address bar after clicking it.
@@ -63,7 +69,7 @@ final class InputRelay {
     private init() {}
 
     func attach(to webView: WKWebView, toolbar toolbarWebView: WKWebView) {
-        self.webView = webView
+        attached = true
         self.toolbarWebView = toolbarWebView
         self.activeWebView = webView
         cursorInitialized = false
@@ -82,6 +88,21 @@ final class InputRelay {
         if let existingKeyboard = GCKeyboard.coalesced {
             configure(keyboard: existingKeyboard)
         }
+    }
+
+    /// Called when a different tab comes to the front: keyboard input has
+    /// to follow the new page, the cursor overlay has to exist in that
+    /// tab's document, and the arrow must be parked in the tab that just
+    /// went away so it isn't left behind there.
+    func activePageChanged() {
+        guard attached, let page = webView else { return }
+        lastCursorHost?.evaluateJavaScript(
+            "window.__extbrowserSetCursor && window.__extbrowserSetCursor(-100,-100)",
+            completionHandler: nil)
+        lastCursorHost = nil
+        activeWebView = page
+        page.evaluateJavaScript(InputRelay.cursorBootstrapScript, completionHandler: nil)
+        page.evaluateJavaScript(InputRelay.keyboardBehaviorScript, completionHandler: nil)
     }
 
     /// Device notifications are registered once and never torn down.
@@ -106,7 +127,7 @@ final class InputRelay {
         // startObservingDevices().
         mice.removeAll()
         keyboard = nil
-        webView = nil
+        attached = false
         toolbarWebView = nil
         activeWebView = nil
         lastCursorHost = nil
@@ -369,9 +390,19 @@ final class InputRelay {
       c.style.zIndex = '2147483647';
       c.style.pointerEvents = 'none';
       c.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" style="position:absolute;top:0;left:0;filter:drop-shadow(0 0 1px white)"><path d="M1 1 L1 15 L5 12 L8 18 L10.5 17 L7.5 11 L13 11 Z" fill="black"/></svg>';
+      c.style.transformOrigin = '0 0';
       document.documentElement.appendChild(c);
       window.__extbrowserSetCursor = function(x, y){
-        c.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+        // The arrow lives inside the page, so it inherits the page's
+        // zoom: a document with no viewport meta (about:blank) is laid
+        // out narrow and scaled up on a large display, which blew the
+        // cursor up to many times its intended size until a real site
+        // loaded. Counter-scale to keep it visually constant. Only the
+        // drawn size is adjusted — the coordinates are left alone so
+        // click targeting is unchanged.
+        var scale = (window.visualViewport && window.visualViewport.scale) ? window.visualViewport.scale : 1;
+        var inv = scale > 0 ? (1 / scale) : 1;
+        c.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + inv + ')';
       };
     })();
     """

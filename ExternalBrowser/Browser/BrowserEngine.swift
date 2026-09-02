@@ -2,47 +2,36 @@ import WebKit
 import Combine
 import UIKit
 
-/// Owns the single persistent WKWebView for the app's one browsing session.
-/// Created once and never recreated so that switching displays or toggling
-/// full-screen never reloads the page or loses session state.
+/// One persistent WKWebView per tab, never recreated, so that switching
+/// displays, toggling full-screen or switching tabs never reloads a page
+/// or loses session state — a remote-desktop session in one tab keeps
+/// running while another tab is in front.
 final class BrowserEngine: NSObject, ObservableObject {
     static let shared = BrowserEngine()
 
-    @Published private(set) var state = BrowserState()
+    /// Deliberately small. Each tab is a full web process, and this is a
+    /// 2018 iPad: a remote-desktop session plus a couple of heavy sites
+    /// is already meaningful memory pressure.
+    static let maxTabs = 3
 
-    let webView: WKWebView
+    @Published private(set) var state = BrowserState()
+    @Published private(set) var tabs: [BrowserTab] = []
+    @Published private(set) var activeTabIndex = 0
+
+    /// The active tab's page view. Exposed under the old single-web-view
+    /// name so everything that drives "the page" — InputRelay, BrowserView,
+    /// navigation — keeps working without knowing about tabs.
+    var webView: WKWebView {
+        tabs[activeTabIndex].webView
+    }
+
     /// Small web view hosting the navigation toolbar. Separate from the
     /// page so it can be clicked/typed into by InputRelay's synthetic
     /// events (a native SwiftUI toolbar is unreachable on this scene).
     let toolbarWebView: WKWebView
     static let toolbarHeight: CGFloat = 44
 
-    private var progressObservation: NSKeyValueObservation?
-    private var titleObservation: NSKeyValueObservation?
-    private var urlObservation: NSKeyValueObservation?
-
     private override init() {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default() // persistent cookies/storage across launches
-        configuration.allowsInlineMediaPlayback = true
-        // Leave mediaTypesRequiringUserActionForPlayback at its default
-        // (.all): autoplaying video/audio must wait for a user gesture,
-        // same as Safari. Disabling that gate would let any page's
-        // background video/ad autoplay at full volume on load — wasted
-        // battery and an unpleasant surprise on a shared monitor.
-
-        // Re-run on every navigation (not just once) — a page load
-        // replaces the DOM and would otherwise wipe the synthetic
-        // cursor InputRelay depends on.
-        for source in [InputRelay.cursorBootstrapScript, InputRelay.keyboardBehaviorScript] {
-            let script = WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-            configuration.userContentController.addUserScript(script)
-        }
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.allowsBackForwardNavigationGestures = true
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-
         // The toolbar lives in its own small web view stacked ABOVE the
         // page rather than as an overlay inside it. An in-page fixed bar
         // covered the top of every site, and padding the body can't fix
@@ -66,37 +55,114 @@ final class BrowserEngine: NSObject, ObservableObject {
         toolbarWebView.scrollView.isScrollEnabled = false
         toolbarWebView.scrollView.contentInsetAdjustmentBehavior = .never
 
-        self.webView = webView
         self.toolbarWebView = toolbarWebView
         super.init()
 
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        configuration.userContentController.add(self, name: "extBrowserBridge")
         toolbarConfiguration.userContentController.add(self, name: "extBrowserBridge")
         toolbarWebView.loadHTMLString(BrowserEngine.toolbarHTML, baseURL: nil)
-        observeWebView()
+
+        tabs = [makeTab()]
+        activeTabIndex = 0
     }
 
-    private func observeWebView() {
-        progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
+    // MARK: - Tabs
+
+    /// Every tab shares the default website data store, so cookies and
+    /// logins are common across them, and carries the same user scripts —
+    /// the cursor overlay has to exist in each tab's document or the
+    /// pointer vanishes after switching.
+    private func makeTab() -> BrowserTab {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default() // persistent cookies/storage across launches
+        configuration.allowsInlineMediaPlayback = true
+        // Leave mediaTypesRequiringUserActionForPlayback at its default
+        // (.all): autoplaying video/audio must wait for a user gesture,
+        // same as Safari. Disabling that gate would let any page's
+        // background video/ad autoplay at full volume on load — wasted
+        // battery and an unpleasant surprise on a shared monitor.
+
+        // Re-run on every navigation (not just once) — a page load
+        // replaces the DOM and would otherwise wipe the synthetic
+        // cursor InputRelay depends on.
+        for source in [InputRelay.cursorBootstrapScript, InputRelay.keyboardBehaviorScript] {
+            let script = WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+            configuration.userContentController.addUserScript(script)
+        }
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.allowsBackForwardNavigationGestures = true
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+
+        let tab = BrowserTab(webView: webView)
+        observe(tab: tab)
+        return tab
+    }
+
+    private func observe(tab: BrowserTab) {
+        tab.titleObservation = tab.webView.observe(\.title, options: [.new]) { [weak self, weak tab] webView, _ in
             DispatchQueue.main.async {
-                self?.state.progress = webView.estimatedProgress
+                guard let self = self, let tab = tab else { return }
+                tab.displayTitle = BrowserTab.shortTitle(for: webView)
+                if self.isActive(tab) {
+                    self.state.title = webView.title
+                }
+                self.syncToolbarTabs()
             }
         }
-        titleObservation = webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
+        tab.urlObservation = tab.webView.observe(\.url, options: [.new]) { [weak self, weak tab] webView, _ in
             DispatchQueue.main.async {
-                self?.state.title = webView.title
+                tab?.displayTitle = BrowserTab.shortTitle(for: webView)
+                guard let self = self, let tab = tab, self.isActive(tab) else { return }
+                self.state.url = webView.url
+                self.state.canGoBack = webView.canGoBack
+                self.state.canGoForward = webView.canGoForward
+                self.syncToolbarURL()
+                self.syncToolbarTabs()
             }
         }
-        urlObservation = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
+        tab.progressObservation = tab.webView.observe(\.estimatedProgress, options: [.new]) { [weak self, weak tab] webView, _ in
             DispatchQueue.main.async {
-                self?.state.url = webView.url
-                self?.state.canGoBack = webView.canGoBack
-                self?.state.canGoForward = webView.canGoForward
-                self?.syncToolbarURL()
+                guard let self = self, let tab = tab, self.isActive(tab) else { return }
+                self.state.progress = webView.estimatedProgress
             }
         }
+    }
+
+    private func isActive(_ tab: BrowserTab) -> Bool {
+        tabs.indices.contains(activeTabIndex) && tabs[activeTabIndex] === tab
+    }
+
+    func addTab() {
+        guard tabs.count < BrowserEngine.maxTabs else { return }
+        tabs.append(makeTab())
+        selectTab(tabs.count - 1)
+    }
+
+    func selectTab(_ index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        activeTabIndex = index
+
+        let webView = tabs[index].webView
+        state.url = webView.url
+        state.title = webView.title
+        state.canGoBack = webView.canGoBack
+        state.canGoForward = webView.canGoForward
+        state.isLoading = webView.isLoading
+
+        ensureDocumentLoaded()
+        syncToolbarURL()
+        syncToolbarTabs()
+        // The relay tracks which view it is driving; tell it the page
+        // underneath has changed.
+        InputRelay.shared.activePageChanged()
+    }
+
+    func closeTab(_ index: Int) {
+        guard tabs.count > 1, tabs.indices.contains(index) else { return }
+        tabs.remove(at: index)
+        selectTab(min(activeTabIndex, tabs.count - 1))
     }
 
     /// Pushes the current URL into the toolbar web view's address field.
@@ -104,6 +170,16 @@ final class BrowserEngine: NSObject, ObservableObject {
         guard let urlString = state.url?.absoluteString else { return }
         let escaped = urlString.replacingOccurrences(of: "'", with: "\\'")
         toolbarWebView.evaluateJavaScript("window.__extbrowserSetURL && window.__extbrowserSetURL('\(escaped)')", completionHandler: nil)
+    }
+
+    private func syncToolbarTabs() {
+        let titles = tabs.map { $0.displayTitle }
+        guard let data = try? JSONSerialization.data(withJSONObject: titles),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let canAdd = tabs.count < BrowserEngine.maxTabs
+        toolbarWebView.evaluateJavaScript(
+            "window.__extbrowserSetTabs && window.__extbrowserSetTabs(\(json), \(activeTabIndex), \(canAdd))",
+            completionHandler: nil)
     }
 
     // MARK: - Navigation
@@ -188,6 +264,11 @@ extension BrowserEngine: WKScriptMessageHandler {
         case "back": goBack()
         case "forward": goForward()
         case "reload": reload()
+        case "newTab": addTab()
+        case "selectTab":
+            if let index = body["value"] as? Int { selectTab(index) }
+        case "closeTab":
+            if let index = body["value"] as? Int { closeTab(index) }
         default: break
         }
     }
@@ -206,7 +287,8 @@ extension BrowserEngine: WKScriptMessageHandler {
       <button id="fwd" style="width:36px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;">&#9654;</button>
       <button id="reload" style="width:36px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;">&#8635;</button>
       <input id="url" type="text" spellcheck="false" autocomplete="off"
-             style="flex:1;height:32px;border-radius:6px;border:none;padding:0 10px;font-size:15px;">
+             style="width:45%;flex:0 0 auto;height:32px;border-radius:6px;border:none;padding:0 10px;font-size:15px;">
+      <div id="tabs" style="flex:1;display:flex;align-items:center;gap:6px;overflow:hidden;"></div>
       <script>
         function send(action, value){
           if (window.webkit && window.webkit.messageHandlers.extBrowserBridge) {
@@ -218,11 +300,49 @@ extension BrowserEngine: WKScriptMessageHandler {
         document.getElementById('back').addEventListener('click', function(){ send('back'); });
         document.getElementById('fwd').addEventListener('click', function(){ send('forward'); });
         document.getElementById('reload').addEventListener('click', function(){ send('reload'); });
+
+        // Explicit editing flag rather than checking document.activeElement:
+        // focus is sticky, so once this field had been clicked every later
+        // navigation was skipped and the bar kept showing a stale URL while
+        // the iPad's own field stayed correct.
+        var editing = false;
+        url.addEventListener('input', function(){ editing = true; });
+        url.addEventListener('blur', function(){ editing = false; });
         url.addEventListener('keydown', function(e){
-          if (e.key === 'Enter') { send('navigate', url.value); }
+          if (e.key === 'Enter') { editing = false; send('navigate', url.value); url.blur(); }
         });
         window.__extbrowserSetURL = function(newURL){
-          if (document.activeElement !== url) { url.value = newURL; }
+          if (!editing) { url.value = newURL; }
+        };
+
+        var tabsEl = document.getElementById('tabs');
+        window.__extbrowserSetTabs = function(tabs, activeIndex, canAdd){
+          tabsEl.innerHTML = '';
+          tabs.forEach(function(t, i){
+            var active = (i === activeIndex);
+            var b = document.createElement('button');
+            b.style.cssText = 'max-width:150px;height:32px;border-radius:6px;border:none;padding:0 8px;font-size:13px;' +
+              'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
+              (active ? 'background:#f5f7fa;color:#1c1c1e;' : 'background:#3a3a3c;color:#d0d4dc;');
+            b.textContent = t || ('Tab ' + (i + 1));
+            b.addEventListener('click', function(){ send('selectTab', i); });
+            tabsEl.appendChild(b);
+
+            if (tabs.length > 1) {
+              var x = document.createElement('button');
+              x.textContent = '\\u00D7';
+              x.style.cssText = 'width:24px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:#d0d4dc;font-size:14px;';
+              x.addEventListener('click', function(){ send('closeTab', i); });
+              tabsEl.appendChild(x);
+            }
+          });
+          if (canAdd) {
+            var plus = document.createElement('button');
+            plus.textContent = '+';
+            plus.style.cssText = 'width:32px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:18px;';
+            plus.addEventListener('click', function(){ send('newTab'); });
+            tabsEl.appendChild(plus);
+          }
         };
       </script>
     </body>
@@ -233,25 +353,42 @@ extension BrowserEngine: WKScriptMessageHandler {
 // MARK: - WKNavigationDelegate
 
 extension BrowserEngine: WKNavigationDelegate {
+    /// All tabs share this delegate, so every callback ignores anything
+    /// that isn't the tab currently on screen — a background tab loading
+    /// must not overwrite the visible tab's status or address bar.
+    private func isFrontmost(_ webView: WKWebView) -> Bool {
+        tabs.indices.contains(activeTabIndex) && tabs[activeTabIndex].webView === webView
+    }
+
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard isFrontmost(webView) else { return }
         state.isLoading = true
         state.errorMessage = nil
     }
 
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard isFrontmost(webView) else { return }
+        state.url = webView.url
+        syncToolbarURL()
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        syncToolbarTabs()
+        guard isFrontmost(webView) else { return }
         state.isLoading = false
         state.progress = 1
         state.canGoBack = webView.canGoBack
         state.canGoForward = webView.canGoForward
         syncToolbarURL()
-
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard isFrontmost(webView) else { return }
         handle(error: error)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard isFrontmost(webView) else { return }
         handle(error: error)
     }
 
@@ -269,11 +406,17 @@ extension BrowserEngine: WKNavigationDelegate {
 // MARK: - WKUIDelegate
 
 extension BrowserEngine: WKUIDelegate {
-    /// The app has exactly one window and no tabs. Requests to open a new
-    /// window (target="_blank", window.open, etc.) are loaded in the same
-    /// WKWebView instead of spawning a second one.
+    /// Requests to open a new window (target="_blank", window.open) go to
+    /// a new tab when there's room, and otherwise load in place. Either
+    /// way no second window is ever created — the external display shows
+    /// exactly one page at a time.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if navigationAction.targetFrame == nil {
+        guard navigationAction.targetFrame == nil else { return nil }
+
+        if tabs.count < BrowserEngine.maxTabs, let url = navigationAction.request.url {
+            addTab()
+            self.webView.load(URLRequest(url: url))
+        } else {
             webView.load(navigationAction.request)
         }
         return nil

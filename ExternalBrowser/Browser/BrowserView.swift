@@ -18,17 +18,17 @@ struct BrowserView: View {
                 WebViewRepresentable(webView: engine.toolbarWebView)
                     .frame(height: BrowserEngine.toolbarHeight)
             }
-            WebViewRepresentable(webView: engine.webView)
+            TabPageView(tabs: engine.tabs, activeIndex: engine.activeTabIndex)
         }
         .ignoresSafeArea()
         .background(Color.black)
     }
 }
 
-/// Wraps the single persistent WKWebView instance. makeUIView always
-/// returns the same shared view (never a new one), so re-parenting this
-/// into a freshly created SwiftUI hierarchy (e.g. after a display
-/// reconnect) does not reload the page or lose session state.
+/// Wraps a persistent WKWebView instance. makeUIView always returns the
+/// same shared view (never a new one), so re-parenting this into a
+/// freshly created SwiftUI hierarchy (e.g. after a display reconnect)
+/// does not reload the page or lose session state.
 struct WebViewRepresentable: UIViewRepresentable {
     let webView: WKWebView
 
@@ -37,4 +37,51 @@ struct WebViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+}
+
+/// Hosts every tab's web view at once and shows only the active one.
+///
+/// Swapping which view a UIViewRepresentable returns doesn't work —
+/// makeUIView is called once per view identity, so a changed web view
+/// would never be installed. More importantly, all tabs stay in the view
+/// hierarchy rather than being removed and re-added: a web view detached
+/// from the hierarchy is liable to have its timers throttled, which would
+/// put a background remote-desktop session at risk of dropping.
+struct TabPageView: UIViewRepresentable {
+    let tabs: [BrowserTab]
+    let activeIndex: Int
+
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .black
+        return container
+    }
+
+    func updateUIView(_ container: UIView, context: Context) {
+        for (index, tab) in tabs.enumerated() {
+            let page = tab.webView
+            if page.superview !== container {
+                page.removeFromSuperview()
+                page.translatesAutoresizingMaskIntoConstraints = false
+                container.addSubview(page)
+                NSLayoutConstraint.activate([
+                    page.topAnchor.constraint(equalTo: container.topAnchor),
+                    page.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                    page.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                    page.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+                ])
+            }
+            page.isHidden = (index != activeIndex)
+        }
+
+        // Drop views belonging to closed tabs.
+        let live = Set(tabs.map { ObjectIdentifier($0.webView) })
+        for subview in container.subviews where !live.contains(ObjectIdentifier(subview)) {
+            subview.removeFromSuperview()
+        }
+
+        if tabs.indices.contains(activeIndex) {
+            container.bringSubviewToFront(tabs[activeIndex].webView)
+        }
+    }
 }
