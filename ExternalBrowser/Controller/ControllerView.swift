@@ -7,6 +7,7 @@ struct ControllerView: View {
     @EnvironmentObject var engine: BrowserEngine
     @EnvironmentObject var display: ExternalDisplayManager
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var lockDiagnostics = PointerLockDiagnostics.shared
 
     @State private var urlText: String = ""
     @FocusState private var urlFieldFocused: Bool
@@ -21,6 +22,30 @@ struct ControllerView: View {
     var body: some View {
         NavigationView {
             Form {
+                // First section deliberately: the list can't be scrolled
+                // while the mouse is captured, so anything lower is
+                // unreachable.
+                Section("Pointer Lock") {
+                    LabeledContent("UIKit reads", value: "\(lockDiagnostics.reads)")
+                    LabeledContent("Last answer", value: lockDiagnostics.lastAnswer ? "locked" : "unlocked")
+                    LabeledContent("Re-arm attempts", value: "\(lockDiagnostics.rearms)")
+                    LabeledContent("Reads since re-arm", value: "\(lockDiagnostics.readsSinceLastRearm)")
+                    LabeledContent("Last trigger", value: lockDiagnostics.lastRearmReason)
+                    Text("If 'reads since re-arm' stays 0, UIKit is ignoring our request. If it climbs but the mouse still misbehaves, UIKit is asking and the system is refusing the lock.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+
+                    Button("Re-arm: ask UIKit") {
+                        NotificationCenter.default.post(name: AppSettings.pointerLockPreferenceChanged, object: nil)
+                    }
+                    Button("Re-arm: rebuild screen") {
+                        NotificationCenter.default.post(name: PointerLockDiagnostics.requestRootSwap, object: nil)
+                    }
+                    Button("Re-arm: nudge geometry") {
+                        NotificationCenter.default.post(name: PointerLockDiagnostics.requestGeometryNudge, object: nil)
+                    }
+                }
+
                 Section("External Display") {
                     LabeledContent("Status", value: display.isConnected ? "Connected" : "Disconnected")
                     if display.isConnected {

@@ -8,6 +8,11 @@ import Combine
 final class ExternalDisplayManager: ObservableObject {
     static let shared = ExternalDisplayManager()
 
+    /// Posted when the display connects or disconnects, so UIKit code
+    /// (which can't observe @Published) can react — notably to re-arm
+    /// pointer lock.
+    static let connectionChanged = Notification.Name("externalDisplayConnectionChanged")
+
     @Published private(set) var isConnected: Bool = false
     @Published private(set) var displayName: String = ""
     @Published private(set) var pixelResolution: CGSize = .zero
@@ -30,6 +35,7 @@ final class ExternalDisplayManager: ObservableObject {
         if AppSettings.shared.startInFullScreen {
             BrowserEngine.shared.setFullScreen(true)
         }
+        NotificationCenter.default.post(name: ExternalDisplayManager.connectionChanged, object: nil)
     }
 
     func sceneDisconnected() {
@@ -37,6 +43,7 @@ final class ExternalDisplayManager: ObservableObject {
         displayName = ""
         pixelResolution = .zero
         pointSize = .zero
+        NotificationCenter.default.post(name: ExternalDisplayManager.connectionChanged, object: nil)
     }
 
     func updateGeometry(for screen: UIScreen) {
