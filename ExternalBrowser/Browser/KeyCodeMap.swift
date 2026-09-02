@@ -124,25 +124,19 @@ enum KeyCodeMap {
         let keyCode: Int
     }
 
-    /// Exchanges Command and Alt.
-    ///
-    /// iPadOS remaps modifiers on non-Apple keyboards so the key beside
-    /// the spacebar acts as Command — which on a PC keyboard is the Alt
-    /// key. The result is that pressing Alt sends Command and a remote
-    /// session never sees Alt at all. Since raw HID is read here, the
-    /// mapping can simply be undone.
-    static func swappingCommandAndAlt(_ modifier: Modifier) -> Modifier {
+    /// Re-labels a modifier as Alt, keeping which side it came from.
+    static func asAlt(_ modifier: Modifier) -> Modifier {
+        Modifier(kind: .alt, domKey: "Alt",
+                 code: modifier.code.hasSuffix("Right") ? "AltRight" : "AltLeft",
+                 keyCode: 18)
+    }
+
+    /// Re-labels a modifier as Command/Meta, keeping which side it came from.
+    static func asMeta(_ modifier: Modifier) -> Modifier {
         let isRight = modifier.code.hasSuffix("Right")
-        switch modifier.kind {
-        case .meta:
-            return Modifier(kind: .alt, domKey: "Alt",
-                            code: isRight ? "AltRight" : "AltLeft", keyCode: 18)
-        case .alt:
-            return Modifier(kind: .meta, domKey: "Meta",
-                            code: isRight ? "MetaRight" : "MetaLeft", keyCode: isRight ? 93 : 91)
-        case .shift, .control:
-            return modifier
-        }
+        return Modifier(kind: .meta, domKey: "Meta",
+                        code: isRight ? "MetaRight" : "MetaLeft",
+                        keyCode: isRight ? 93 : 91)
     }
 
     static func modifier(for keyCode: GCKeyCode) -> Modifier? {

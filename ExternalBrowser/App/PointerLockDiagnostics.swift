@@ -31,7 +31,17 @@ final class PointerLockDiagnostics: ObservableObject {
     private var readsAtLastRearm = 0
     @Published private(set) var readsSinceLastRearm = 0
 
+    /// The last key forwarded to the page, exactly as the page saw it.
+    /// Modifier problems are invisible otherwise — this shows whether
+    /// Alt actually left the app, which is the difference between "we
+    /// never sent it" and "the remote session ignored it".
+    @Published private(set) var lastKey = "—"
+
     private init() {}
+
+    func recordKey(_ description: String) {
+        DispatchQueue.main.async { self.lastKey = description }
+    }
 
     func recordRead(_ answer: Bool) {
         // May be called during a UIKit layout pass; hop to the next

@@ -31,12 +31,32 @@ final class AppSettings: ObservableObject {
     /// pointer. Exposed as a toggle because pointer lock has proven
     /// fragile on this hardware — if it misbehaves, turning it off
     /// restores basic (edge-limited) mouse control without a rebuild.
-    /// Undoes iPadOS's modifier remapping for PC keyboards, where the key
-    /// beside the spacebar (Alt) is delivered as Command. Defaults on,
-    /// since the intended setup is a standard PC keyboard; turn it off
-    /// when using an Apple keyboard, whose layout needs no correction.
-    @Published var pcKeyboardMode: Bool {
-        didSet { UserDefaults.standard.set(pcKeyboardMode, forKey: Keys.pcKeyboard) }
+    /// Which physical key should produce Alt.
+    ///
+    /// iPadOS remaps modifiers on non-Apple keyboards so the key beside
+    /// the spacebar behaves as Command — which on a PC keyboard is Alt.
+    /// Rather than guessing the keyboard, this states the mapping
+    /// outright. `.both` is the default because it cannot be wrong: Alt
+    /// reaches a remote session whichever key iPadOS decided to deliver.
+    /// The cost is that Command/Super is then unavailable remotely.
+    enum AltKeySource: String, CaseIterable, Identifiable {
+        case option    // Apple layout: the Option key sends Alt
+        case command   // PC layout: the key beside the spacebar sends Alt
+        case both      // either key sends Alt
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .option: return "Option only"
+            case .command: return "Command only"
+            case .both: return "Option or Command"
+            }
+        }
+    }
+
+    @Published var altKeySource: AltKeySource {
+        didSet { UserDefaults.standard.set(altKeySource.rawValue, forKey: Keys.pcKeyboard) }
     }
 
     @Published var pointerLockEnabled: Bool {
@@ -52,6 +72,6 @@ final class AppSettings: ObservableObject {
         autoActivateBrowser = UserDefaults.standard.bool(forKey: Keys.autoActivateBrowser)
         // Defaults to on (bool(forKey:) would give false for an unset key).
         pointerLockEnabled = UserDefaults.standard.object(forKey: Keys.pointerLock) as? Bool ?? true
-        pcKeyboardMode = UserDefaults.standard.object(forKey: Keys.pcKeyboard) as? Bool ?? true
+        altKeySource = AltKeySource(rawValue: UserDefaults.standard.string(forKey: Keys.pcKeyboard) ?? "") ?? .both
     }
 }

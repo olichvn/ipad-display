@@ -97,6 +97,7 @@ struct ControllerView: View {
                         LabeledContent("Re-arm attempts", value: "\(lockDiagnostics.rearms)")
                         LabeledContent("Reads since re-arm", value: "\(lockDiagnostics.readsSinceLastRearm)")
                         LabeledContent("Last trigger", value: lockDiagnostics.lastRearmReason)
+                        LabeledContent("Last key sent", value: lockDiagnostics.lastKey)
                         Text("If 'reads since re-arm' stays 0, UIKit is ignoring our request. If it climbs but the mouse still misbehaves, UIKit is asking and the system is refusing the lock.")
                             .font(.footnote)
                             .foregroundColor(.secondary)

@@ -36,8 +36,12 @@ struct SettingsView: View {
                 }
 
                 Section("Keyboard") {
-                    Toggle("PC Keyboard", isOn: $settings.pcKeyboardMode)
-                    Text("Swaps Command and Alt. iPadOS makes the key next to the spacebar act as Command, which on a PC keyboard is Alt — so without this, pressing Alt sends Command and a remote session never receives Alt. Turn off when using an Apple keyboard.")
+                    Picker("Send Alt from", selection: $settings.altKeySource) {
+                        ForEach(AppSettings.AltKeySource.allCases) { source in
+                            Text(source.label).tag(source)
+                        }
+                    }
+                    Text("iPadOS makes the key beside the spacebar act as Command, which on a PC keyboard is the Alt key — so pressing Alt can arrive as Command and a remote session never sees Alt. \"Option or Command\" makes either key send Alt, which works on any keyboard; the trade-off is that Command/Super isn't available remotely.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }

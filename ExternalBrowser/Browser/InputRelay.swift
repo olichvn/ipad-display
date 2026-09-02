@@ -212,20 +212,20 @@ final class InputRelay {
     /// Maps the cursor onto whichever web view it's over, converting to
     /// that view's local coordinates.
     ///
-    /// Page coordinates are additionally divided by the page zoom: the
-    /// events carry CSS pixels, and zooming changes how many CSS pixels
-    /// fit in a point. Without this, clicks land progressively further
-    /// from the cursor as you zoom. The toolbar is never zoomed, so it
-    /// needs no correction.
-    private func target() -> (webView: WKWebView, point: CGPoint, zoom: CGFloat)? {
+    /// Coordinates stay in view points here; the conversion to CSS pixels
+    /// happens in the page itself, which divides by its own
+    /// window.innerWidth. Scaling by a zoom value tracked on this side
+    /// was unreliable — a page can be scaled by pageZoom, by its own
+    /// viewport meta, or by about:blank's default layout width, and any
+    /// disagreement made clicks land away from the cursor. Asking the
+    /// page cannot disagree with the page.
+    private func target() -> (webView: WKWebView, point: CGPoint)? {
         guard let webView = webView else { return nil }
         let offset = toolbarOffset
         if offset > 0, cursor.y < offset, let toolbar = toolbarWebView {
-            return (toolbar, CGPoint(x: cursor.x, y: cursor.y), 1)
+            return (toolbar, CGPoint(x: cursor.x, y: cursor.y))
         }
-        let zoom = max(BrowserEngine.shared.pageZoom, 0.01)
-        let local = CGPoint(x: cursor.x / zoom, y: (cursor.y - offset) / zoom)
-        return (webView, local, zoom)
+        return (webView, CGPoint(x: cursor.x, y: cursor.y - offset))
     }
 
     private func handleMouseMoved(deltaX: CGFloat, deltaY: CGFloat) {
@@ -256,7 +256,7 @@ final class InputRelay {
     /// instead. Only if nothing consumes the event do we scroll: first
     /// the nearest scrollable ancestor, then the page itself.
     private func handleScroll(deltaX: CGFloat, deltaY: CGFloat) {
-        guard let (target, point, zoom) = target() else { return }
+        guard let (target, point) = target() else { return }
         // Low sensitivity + inverted from the initial attempt, per
         // hardware feedback (was both too fast and backwards).
         let sensitivity: CGFloat = 2
@@ -264,16 +264,17 @@ final class InputRelay {
         // DOM deltaY is positive when scrolling down, the opposite sign
         // to the contentOffset arithmetic this replaced.
         let dy = -deltaY * sensitivity
-        let x = Int(point.x)
-        let y = Int(point.y)
+        let viewWidth = max(target.bounds.width, 1)
 
         let js = """
         (function(){
         try {
-          var el = document.elementFromPoint(\(x), \(y)) || document.body || document.documentElement;
+          var f = (window.innerWidth > 0) ? (window.innerWidth / \(Int(viewWidth))) : 1;
+          var x = Math.round(\(Int(point.x)) * f), y = Math.round(\(Int(point.y)) * f);
+          var el = document.elementFromPoint(x, y) || document.body || document.documentElement;
           if (!el) return;
           var dx = \(dx), dy = \(dy);
-          var opts = {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y),
+          var opts = {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y,
                       deltaX:dx, deltaY:dy, deltaMode:0};
 
           var consumed = !el.dispatchEvent(new WheelEvent('wheel', opts));
@@ -330,7 +331,7 @@ final class InputRelay {
     private func dispatchMouse(type: String, button: Int) {
         // A click before any movement would otherwise land at (0,0).
         initializeCursorIfNeeded(in: CGRect(origin: .zero, size: canvasSize))
-        guard let (target, point, zoom) = target() else { return }
+        guard let (target, point) = target() else { return }
 
         // Keep the cursor drawn in exactly one view: when it crosses
         // between the toolbar and the page, park the old view's arrow
@@ -352,16 +353,27 @@ final class InputRelay {
             activeWebView = target
         }
 
-        let x = Int(point.x)
-        let y = Int(point.y)
+        let viewWidth = max(target.bounds.width, 1)
         var js = """
         (function(){
-          var el = document.elementFromPoint(\(x), \(y)) || document.body;
-          var opts = {bubbles:true, cancelable:true, view:window, clientX:\(x), clientY:\(y), button:\(button), shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)};
+          // The page converts points to its own CSS pixels: innerWidth
+          // already reflects page zoom, viewport meta and about:blank's
+          // default layout width, so this can't drift out of step with
+          // whatever the page is actually doing.
+          var f = (window.innerWidth > 0) ? (window.innerWidth / \(Int(viewWidth))) : 1;
+          var x = Math.round(\(Int(point.x)) * f), y = Math.round(\(Int(point.y)) * f);
+          var el = document.elementFromPoint(x, y) || document.body;
+          if (!el) return;
+          var opts = {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y, button:\(button), shiftKey:\(shiftDown), ctrlKey:\(ctrlDown), altKey:\(altDown), metaKey:\(metaDown)};
           el.dispatchEvent(new MouseEvent('\(type)', opts));
           if ('\(type)' === 'mousedown') {
             var focusable = el.closest('input, textarea, [contenteditable="true"]');
-            if (focusable) focusable.focus();
+            if (focusable) { focusable.focus(); }
+            else if (document.activeElement && document.activeElement.blur) {
+              // Clicking anywhere else drops focus, so the address bar
+              // can't keep swallowing keystrokes after being clicked once.
+              document.activeElement.blur();
+            }
             el.dispatchEvent(new MouseEvent('click', opts));
           }
         """
@@ -377,7 +389,7 @@ final class InputRelay {
         }
         js += """
 
-          if (window.__extbrowserSetCursor) window.__extbrowserSetCursor(\(x), \(y), \(1.0 / zoom));
+          if (window.__extbrowserSetCursor) window.__extbrowserSetCursor(x, y, f);
         })();
         """
         target.evaluateJavaScript(js, completionHandler: nil)
@@ -427,8 +439,13 @@ final class InputRelay {
 
     private func handleKey(keyCode: GCKeyCode, pressed: Bool) {
         if var modifier = KeyCodeMap.modifier(for: keyCode) {
-            if AppSettings.shared.pcKeyboardMode {
-                modifier = KeyCodeMap.swappingCommandAndAlt(modifier)
+            switch (modifier.kind, AppSettings.shared.altKeySource) {
+            case (.meta, .command), (.meta, .both):
+                modifier = KeyCodeMap.asAlt(modifier)
+            case (.alt, .command):
+                modifier = KeyCodeMap.asMeta(modifier)
+            default:
+                break // already correct
             }
             switch modifier.kind {
             case .shift: shiftDown = pressed
@@ -445,6 +462,14 @@ final class InputRelay {
 
     private func dispatchKey(domKey: String, code: String, keyCode: Int, char: Character?, pressed: Bool) {
         guard let webView = activeWebView ?? webView else { return }
+        if pressed {
+            var mods = ""
+            if shiftDown { mods += "⇧" }
+            if ctrlDown { mods += "⌃" }
+            if altDown { mods += "⌥" }
+            if metaDown { mods += "⌘" }
+            PointerLockDiagnostics.shared.recordKey("\(mods)\(domKey) [\(code)/\(keyCode)]")
+        }
         let escapedKey = domKey.replacingOccurrences(of: "'", with: "\\'")
         let type = pressed ? "keydown" : "keyup"
         // KeyboardEvent's constructor accepts `code` directly, but
