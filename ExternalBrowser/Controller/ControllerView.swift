@@ -12,6 +12,7 @@ struct ControllerView: View {
     @State private var urlText: String = ""
     @FocusState private var urlFieldFocused: Bool
     @State private var showSettings = false
+    @State private var showDiagnostics = false
 
     /// True when the hardware keyboard and mouse belong to the page on
     /// the external display rather than to this iPad UI.
@@ -22,30 +23,6 @@ struct ControllerView: View {
     var body: some View {
         NavigationView {
             Form {
-                // First section deliberately: the list can't be scrolled
-                // while the mouse is captured, so anything lower is
-                // unreachable.
-                Section("Pointer Lock") {
-                    LabeledContent("UIKit reads", value: "\(lockDiagnostics.reads)")
-                    LabeledContent("Last answer", value: lockDiagnostics.lastAnswer ? "locked" : "unlocked")
-                    LabeledContent("Re-arm attempts", value: "\(lockDiagnostics.rearms)")
-                    LabeledContent("Reads since re-arm", value: "\(lockDiagnostics.readsSinceLastRearm)")
-                    LabeledContent("Last trigger", value: lockDiagnostics.lastRearmReason)
-                    Text("If 'reads since re-arm' stays 0, UIKit is ignoring our request. If it climbs but the mouse still misbehaves, UIKit is asking and the system is refusing the lock.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-
-                    Button("Re-arm: ask UIKit") {
-                        NotificationCenter.default.post(name: AppSettings.pointerLockPreferenceChanged, object: nil)
-                    }
-                    Button("Re-arm: rebuild screen") {
-                        NotificationCenter.default.post(name: PointerLockDiagnostics.requestRootSwap, object: nil)
-                    }
-                    Button("Re-arm: nudge geometry") {
-                        NotificationCenter.default.post(name: PointerLockDiagnostics.requestGeometryNudge, object: nil)
-                    }
-                }
-
                 Section("External Display") {
                     LabeledContent("Status", value: display.isConnected ? "Connected" : "Disconnected")
                     if display.isConnected {
@@ -86,9 +63,6 @@ struct ControllerView: View {
                 .disabled(mouseCaptured)
 
                 Section("Browser") {
-                    LabeledContent("Loading", value: engine.state.isLoading ? "Yes" : "No")
-                    LabeledContent("Back", value: engine.state.canGoBack ? "Enabled" : "Disabled")
-                    LabeledContent("Forward", value: engine.state.canGoForward ? "Enabled" : "Disabled")
                     if let error = engine.state.errorMessage {
                         Text(error).foregroundColor(.red).font(.footnote)
                     }
@@ -111,6 +85,32 @@ struct ControllerView: View {
 
                 Section {
                     Button("Settings") { showSettings = true }
+                }
+
+                // Kept, but out of the way: still needed to understand
+                // pointer lock, which remains the least predictable part
+                // of the app.
+                Section {
+                    DisclosureGroup("Diagnostics", isExpanded: $showDiagnostics) {
+                        LabeledContent("UIKit reads", value: "\(lockDiagnostics.reads)")
+                        LabeledContent("Last answer", value: lockDiagnostics.lastAnswer ? "locked" : "unlocked")
+                        LabeledContent("Re-arm attempts", value: "\(lockDiagnostics.rearms)")
+                        LabeledContent("Reads since re-arm", value: "\(lockDiagnostics.readsSinceLastRearm)")
+                        LabeledContent("Last trigger", value: lockDiagnostics.lastRearmReason)
+                        Text("If 'reads since re-arm' stays 0, UIKit is ignoring our request. If it climbs but the mouse still misbehaves, UIKit is asking and the system is refusing the lock.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+
+                        Button("Re-arm: ask UIKit") {
+                            NotificationCenter.default.post(name: AppSettings.pointerLockPreferenceChanged, object: nil)
+                        }
+                        Button("Re-arm: rebuild screen") {
+                            NotificationCenter.default.post(name: PointerLockDiagnostics.requestRootSwap, object: nil)
+                        }
+                        Button("Re-arm: nudge geometry") {
+                            NotificationCenter.default.post(name: PointerLockDiagnostics.requestGeometryNudge, object: nil)
+                        }
+                    }
                 }
             }
             .navigationTitle("External Browser")

@@ -36,6 +36,13 @@ enum KeyCodeMap {
         if let named = namedKeys[keyCode] {
             return Mapped(domKey: named.key, code: named.code, keyCode: named.keyCode, char: nil)
         }
+        // Numeric keypad, always treated as numeric regardless of Num
+        // Lock. The keypad's own DOM codes ("Numpad4" rather than
+        // "Digit4") are deliberate: remote-desktop sessions distinguish
+        // keypad keys from the number row.
+        if let pad = keypad[keyCode] {
+            return Mapped(domKey: pad.key, code: pad.code, keyCode: pad.keyCode, char: pad.char)
+        }
         return nil
     }
 
@@ -57,6 +64,25 @@ enum KeyCodeMap {
         .five: ("5", "%", "Digit5", 53), .six: ("6", "^", "Digit6", 54),
         .seven: ("7", "&", "Digit7", 55), .eight: ("8", "*", "Digit8", 56),
         .nine: ("9", "(", "Digit9", 57), .zero: ("0", ")", "Digit0", 48)
+    ]
+
+    private static let keypad: [GCKeyCode: (key: String, code: String, keyCode: Int, char: Character?)] = [
+        .keypad0: ("0", "Numpad0", 96, "0"),
+        .keypad1: ("1", "Numpad1", 97, "1"),
+        .keypad2: ("2", "Numpad2", 98, "2"),
+        .keypad3: ("3", "Numpad3", 99, "3"),
+        .keypad4: ("4", "Numpad4", 100, "4"),
+        .keypad5: ("5", "Numpad5", 101, "5"),
+        .keypad6: ("6", "Numpad6", 102, "6"),
+        .keypad7: ("7", "Numpad7", 103, "7"),
+        .keypad8: ("8", "Numpad8", 104, "8"),
+        .keypad9: ("9", "Numpad9", 105, "9"),
+        .keypadAsterisk: ("*", "NumpadMultiply", 106, "*"),
+        .keypadPlus: ("+", "NumpadAdd", 107, "+"),
+        .keypadHyphen: ("-", "NumpadSubtract", 109, "-"),
+        .keypadPeriod: (".", "NumpadDecimal", 110, "."),
+        .keypadSlash: ("/", "NumpadDivide", 111, "/"),
+        .keypadEnter: ("Enter", "NumpadEnter", 13, nil)
     ]
 
     private static let symbols: [GCKeyCode: (plain: Character, shifted: Character, code: String, keyCode: Int)] = [
@@ -96,6 +122,27 @@ enum KeyCodeMap {
         let domKey: String
         let code: String
         let keyCode: Int
+    }
+
+    /// Exchanges Command and Alt.
+    ///
+    /// iPadOS remaps modifiers on non-Apple keyboards so the key beside
+    /// the spacebar acts as Command — which on a PC keyboard is the Alt
+    /// key. The result is that pressing Alt sends Command and a remote
+    /// session never sees Alt at all. Since raw HID is read here, the
+    /// mapping can simply be undone.
+    static func swappingCommandAndAlt(_ modifier: Modifier) -> Modifier {
+        let isRight = modifier.code.hasSuffix("Right")
+        switch modifier.kind {
+        case .meta:
+            return Modifier(kind: .alt, domKey: "Alt",
+                            code: isRight ? "AltRight" : "AltLeft", keyCode: 18)
+        case .alt:
+            return Modifier(kind: .meta, domKey: "Meta",
+                            code: isRight ? "MetaRight" : "MetaLeft", keyCode: isRight ? 93 : 91)
+        case .shift, .control:
+            return modifier
+        }
     }
 
     static func modifier(for keyCode: GCKeyCode) -> Modifier? {

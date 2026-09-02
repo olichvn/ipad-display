@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject var engine: BrowserEngine
     @EnvironmentObject var display: ExternalDisplayManager
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var downloads = DownloadManager.shared
     @Environment(\.dismiss) private var dismiss
 
     @State private var homepageText: String = ""
@@ -31,6 +32,34 @@ struct SettingsView: View {
 
                     if let message = clearedMessage {
                         Text(message).font(.footnote).foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Keyboard") {
+                    Toggle("PC Keyboard", isOn: $settings.pcKeyboardMode)
+                    Text("Swaps Command and Alt. iPadOS makes the key next to the spacebar act as Command, which on a PC keyboard is Alt — so without this, pressing Alt sends Command and a remote session never receives Alt. Turn off when using an Apple keyboard.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+
+                Section("Downloads") {
+                    if downloads.items.isEmpty {
+                        Text("Saved files appear here, and in the Files app under On My iPad → External Browser → Downloads.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(downloads.items) { item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.filename)
+                                if let failure = item.failure {
+                                    Text(failure).font(.footnote).foregroundColor(.red)
+                                } else {
+                                    Text(item.finished ? "Saved" : "Downloading…")
+                                        .font(.footnote)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
                     }
                 }
 

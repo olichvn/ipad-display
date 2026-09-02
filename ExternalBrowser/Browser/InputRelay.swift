@@ -211,13 +211,21 @@ final class InputRelay {
 
     /// Maps the cursor onto whichever web view it's over, converting to
     /// that view's local coordinates.
-    private func target() -> (webView: WKWebView, point: CGPoint)? {
+    ///
+    /// Page coordinates are additionally divided by the page zoom: the
+    /// events carry CSS pixels, and zooming changes how many CSS pixels
+    /// fit in a point. Without this, clicks land progressively further
+    /// from the cursor as you zoom. The toolbar is never zoomed, so it
+    /// needs no correction.
+    private func target() -> (webView: WKWebView, point: CGPoint, zoom: CGFloat)? {
         guard let webView = webView else { return nil }
         let offset = toolbarOffset
         if offset > 0, cursor.y < offset, let toolbar = toolbarWebView {
-            return (toolbar, CGPoint(x: cursor.x, y: cursor.y))
+            return (toolbar, CGPoint(x: cursor.x, y: cursor.y), 1)
         }
-        return (webView, CGPoint(x: cursor.x, y: cursor.y - offset))
+        let zoom = max(BrowserEngine.shared.pageZoom, 0.01)
+        let local = CGPoint(x: cursor.x / zoom, y: (cursor.y - offset) / zoom)
+        return (webView, local, zoom)
     }
 
     private func handleMouseMoved(deltaX: CGFloat, deltaY: CGFloat) {
@@ -248,7 +256,7 @@ final class InputRelay {
     /// instead. Only if nothing consumes the event do we scroll: first
     /// the nearest scrollable ancestor, then the page itself.
     private func handleScroll(deltaX: CGFloat, deltaY: CGFloat) {
-        guard let (target, point) = target() else { return }
+        guard let (target, point, zoom) = target() else { return }
         // Low sensitivity + inverted from the initial attempt, per
         // hardware feedback (was both too fast and backwards).
         let sensitivity: CGFloat = 2
@@ -322,7 +330,7 @@ final class InputRelay {
     private func dispatchMouse(type: String, button: Int) {
         // A click before any movement would otherwise land at (0,0).
         initializeCursorIfNeeded(in: CGRect(origin: .zero, size: canvasSize))
-        guard let (target, point) = target() else { return }
+        guard let (target, point, zoom) = target() else { return }
 
         // Keep the cursor drawn in exactly one view: when it crosses
         // between the toolbar and the page, park the old view's arrow
@@ -369,7 +377,7 @@ final class InputRelay {
         }
         js += """
 
-          if (window.__extbrowserSetCursor) window.__extbrowserSetCursor(\(x), \(y));
+          if (window.__extbrowserSetCursor) window.__extbrowserSetCursor(\(x), \(y), \(1.0 / zoom));
         })();
         """
         target.evaluateJavaScript(js, completionHandler: nil)
@@ -392,16 +400,17 @@ final class InputRelay {
       c.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" style="position:absolute;top:0;left:0;filter:drop-shadow(0 0 1px white)"><path d="M1 1 L1 15 L5 12 L8 18 L10.5 17 L7.5 11 L13 11 Z" fill="black"/></svg>';
       c.style.transformOrigin = '0 0';
       document.documentElement.appendChild(c);
-      window.__extbrowserSetCursor = function(x, y){
+      window.__extbrowserSetCursor = function(x, y, extraInverse){
         // The arrow lives inside the page, so it inherits the page's
         // zoom: a document with no viewport meta (about:blank) is laid
         // out narrow and scaled up on a large display, which blew the
         // cursor up to many times its intended size until a real site
         // loaded. Counter-scale to keep it visually constant. Only the
         // drawn size is adjusted — the coordinates are left alone so
-        // click targeting is unchanged.
+        // click targeting is unchanged. extraInverse carries the page
+        // zoom, which the visual viewport doesn't report.
         var scale = (window.visualViewport && window.visualViewport.scale) ? window.visualViewport.scale : 1;
-        var inv = scale > 0 ? (1 / scale) : 1;
+        var inv = (scale > 0 ? (1 / scale) : 1) * (typeof extraInverse === 'number' ? extraInverse : 1);
         c.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + inv + ')';
       };
     })();
@@ -417,7 +426,10 @@ final class InputRelay {
     }
 
     private func handleKey(keyCode: GCKeyCode, pressed: Bool) {
-        if let modifier = KeyCodeMap.modifier(for: keyCode) {
+        if var modifier = KeyCodeMap.modifier(for: keyCode) {
+            if AppSettings.shared.pcKeyboardMode {
+                modifier = KeyCodeMap.swappingCommandAndAlt(modifier)
+            }
             switch modifier.kind {
             case .shift: shiftDown = pressed
             case .control: ctrlDown = pressed

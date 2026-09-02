@@ -51,6 +51,11 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         ITSAppUsesNonExemptEncryption: false
+        # Downloads are saved into the app's Documents folder; these two
+        # keys are what make that folder visible and editable in the Files
+        # app, so saved documents can be reached without a save dialog.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ipaddisplay.ExternalBrowser

@@ -94,6 +94,7 @@ final class BrowserEngine: NSObject, ObservableObject {
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        webView.pageZoom = pageZoom // a new tab matches the current zoom
 
         let tab = BrowserTab(webView: webView)
         observe(tab: tab)
@@ -132,6 +133,43 @@ final class BrowserEngine: NSObject, ObservableObject {
 
     private func isActive(_ tab: BrowserTab) -> Bool {
         tabs.indices.contains(activeTabIndex) && tabs[activeTabIndex] === tab
+    }
+
+    // MARK: - Zoom
+
+    static let zoomSteps: [CGFloat] = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
+
+    /// Applies to the page only. The toolbar is a separate web view, so
+    /// the address bar and tabs keep their size whatever the page does.
+    private(set) var pageZoom: CGFloat = 1.0
+
+    func zoomIn() {
+        let next = BrowserEngine.zoomSteps.first { $0 > pageZoom + 0.001 }
+        setZoom(next ?? BrowserEngine.zoomSteps.last ?? 1)
+    }
+
+    func zoomOut() {
+        let previous = BrowserEngine.zoomSteps.last { $0 < pageZoom - 0.001 }
+        setZoom(previous ?? BrowserEngine.zoomSteps.first ?? 1)
+    }
+
+    func resetZoom() {
+        setZoom(1.0)
+    }
+
+    private func setZoom(_ zoom: CGFloat) {
+        pageZoom = zoom
+        for tab in tabs {
+            tab.webView.pageZoom = zoom
+        }
+        syncToolbarZoom()
+    }
+
+    private func syncToolbarZoom() {
+        let percent = Int((pageZoom * 100).rounded())
+        toolbarWebView.evaluateJavaScript(
+            "window.__extbrowserSetZoom && window.__extbrowserSetZoom(\(percent))",
+            completionHandler: nil)
     }
 
     func addTab() {
@@ -265,6 +303,9 @@ extension BrowserEngine: WKScriptMessageHandler {
         case "forward": goForward()
         case "reload": reload()
         case "newTab": addTab()
+        case "zoomIn": zoomIn()
+        case "zoomOut": zoomOut()
+        case "zoomReset": resetZoom()
         case "selectTab":
             if let index = body["value"] as? Int { selectTab(index) }
         case "closeTab":
@@ -289,6 +330,9 @@ extension BrowserEngine: WKScriptMessageHandler {
       <input id="url" type="text" spellcheck="false" autocomplete="off"
              style="width:45%;flex:0 0 auto;height:32px;border-radius:6px;border:none;padding:0 10px;font-size:15px;">
       <div id="tabs" style="flex:1;display:flex;align-items:center;gap:6px;overflow:hidden;"></div>
+      <button id="zoomOut" style="width:30px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;">&#8722;</button>
+      <button id="zoomReset" style="min-width:48px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:#d0d4dc;font-size:12px;">100%</button>
+      <button id="zoomIn" style="width:30px;height:32px;border-radius:6px;border:none;background:#3a3a3c;color:white;font-size:16px;">+</button>
       <script>
         function send(action, value){
           if (window.webkit && window.webkit.messageHandlers.extBrowserBridge) {
@@ -313,6 +357,14 @@ extension BrowserEngine: WKScriptMessageHandler {
         });
         window.__extbrowserSetURL = function(newURL){
           if (!editing) { url.value = newURL; }
+        };
+
+        var zoomLabel = document.getElementById('zoomReset');
+        document.getElementById('zoomIn').addEventListener('click', function(){ send('zoomIn'); });
+        document.getElementById('zoomOut').addEventListener('click', function(){ send('zoomOut'); });
+        zoomLabel.addEventListener('click', function(){ send('zoomReset'); });
+        window.__extbrowserSetZoom = function(percent){
+          zoomLabel.textContent = percent + '%';
         };
 
         var tabsEl = document.getElementById('tabs');
@@ -380,6 +432,23 @@ extension BrowserEngine: WKNavigationDelegate {
         state.canGoBack = webView.canGoBack
         state.canGoForward = webView.canGoForward
         syncToolbarURL()
+    }
+
+    /// Anything the web view can't display itself becomes a download
+    /// rather than a blank page — that's what makes "save this document"
+    /// work at all.
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        DownloadManager.shared.track(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        DownloadManager.shared.track(download)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

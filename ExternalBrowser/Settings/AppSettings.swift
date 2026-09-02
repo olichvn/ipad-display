@@ -14,6 +14,7 @@ final class AppSettings: ObservableObject {
         static let startInFullScreen = "settings.startInFullScreen"
         static let autoActivateBrowser = "settings.autoActivateBrowser"
         static let pointerLock = "settings.pointerLock"
+        static let pcKeyboard = "settings.pcKeyboard"
     }
 
     @Published var homepage: String {
@@ -30,6 +31,14 @@ final class AppSettings: ObservableObject {
     /// pointer. Exposed as a toggle because pointer lock has proven
     /// fragile on this hardware — if it misbehaves, turning it off
     /// restores basic (edge-limited) mouse control without a rebuild.
+    /// Undoes iPadOS's modifier remapping for PC keyboards, where the key
+    /// beside the spacebar (Alt) is delivered as Command. Defaults on,
+    /// since the intended setup is a standard PC keyboard; turn it off
+    /// when using an Apple keyboard, whose layout needs no correction.
+    @Published var pcKeyboardMode: Bool {
+        didSet { UserDefaults.standard.set(pcKeyboardMode, forKey: Keys.pcKeyboard) }
+    }
+
     @Published var pointerLockEnabled: Bool {
         didSet {
             UserDefaults.standard.set(pointerLockEnabled, forKey: Keys.pointerLock)
@@ -43,5 +52,6 @@ final class AppSettings: ObservableObject {
         autoActivateBrowser = UserDefaults.standard.bool(forKey: Keys.autoActivateBrowser)
         // Defaults to on (bool(forKey:) would give false for an unset key).
         pointerLockEnabled = UserDefaults.standard.object(forKey: Keys.pointerLock) as? Bool ?? true
+        pcKeyboardMode = UserDefaults.standard.object(forKey: Keys.pcKeyboard) as? Bool ?? true
     }
 }
