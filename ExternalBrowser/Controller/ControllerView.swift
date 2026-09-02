@@ -38,6 +38,42 @@ struct ControllerView: View {
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+                // Directly under External Display on purpose: reading
+                // these usually means toggling Capture Mouse at the same
+                // time, and that toggle has to stay on screen while the
+                // group is expanded — the list can't be scrolled while
+                // the mouse is captured.
+                Section {
+                    DisclosureGroup("Diagnostics", isExpanded: $showDiagnostics) {
+                        LabeledContent("UIKit reads", value: "\(lockDiagnostics.reads)")
+                        LabeledContent("Last answer", value: lockDiagnostics.lastAnswer ? "locked" : "unlocked")
+                        LabeledContent("Re-arms", value: "\(lockDiagnostics.rearms)")
+                        LabeledContent("Reads since re-arm", value: "\(lockDiagnostics.readsSinceLastRearm)")
+                        LabeledContent("Last trigger", value: lockDiagnostics.lastRearmReason)
+                        LabeledContent("Last key sent", value: lockDiagnostics.lastKey)
+
+                        Text("Raw keys (newest first)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        ForEach(lockDiagnostics.rawKeys, id: \.self) { entry in
+                            Text(entry)
+                                .font(.system(.caption, design: .monospaced))
+                        }
+
+                        Button("Re-arm: ask UIKit") {
+                            NotificationCenter.default.post(name: AppSettings.pointerLockPreferenceChanged, object: nil)
+                        }
+                        Button("Re-arm: rebuild screen") {
+                            NotificationCenter.default.post(name: PointerLockDiagnostics.requestRootSwap, object: nil)
+                        }
+                        Button("Re-arm: nudge geometry") {
+                            NotificationCenter.default.post(name: PointerLockDiagnostics.requestGeometryNudge, object: nil)
+                        }
+                    }
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
                 Section("Address") {
                     if mouseCaptured {
@@ -61,6 +97,7 @@ struct ControllerView: View {
                 // to the external display then, and Tab/Enter would otherwise
                 // also walk and press these controls.
                 .disabled(mouseCaptured)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
                 Section("Browser") {
                     if let error = engine.state.errorMessage {
@@ -82,39 +119,21 @@ struct ControllerView: View {
                         engine.toggleFullScreen()
                     }
                 }
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
                 Section {
                     Button("Settings") { showSettings = true }
                 }
-
-                // Kept, but out of the way: still needed to understand
-                // pointer lock, which remains the least predictable part
-                // of the app.
-                Section {
-                    DisclosureGroup("Diagnostics", isExpanded: $showDiagnostics) {
-                        LabeledContent("UIKit reads", value: "\(lockDiagnostics.reads)")
-                        LabeledContent("Last answer", value: lockDiagnostics.lastAnswer ? "locked" : "unlocked")
-                        LabeledContent("Re-arm attempts", value: "\(lockDiagnostics.rearms)")
-                        LabeledContent("Reads since re-arm", value: "\(lockDiagnostics.readsSinceLastRearm)")
-                        LabeledContent("Last trigger", value: lockDiagnostics.lastRearmReason)
-                        LabeledContent("Last key sent", value: lockDiagnostics.lastKey)
-                        Text("If 'reads since re-arm' stays 0, UIKit is ignoring our request. If it climbs but the mouse still misbehaves, UIKit is asking and the system is refusing the lock.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-
-                        Button("Re-arm: ask UIKit") {
-                            NotificationCenter.default.post(name: AppSettings.pointerLockPreferenceChanged, object: nil)
-                        }
-                        Button("Re-arm: rebuild screen") {
-                            NotificationCenter.default.post(name: PointerLockDiagnostics.requestRootSwap, object: nil)
-                        }
-                        Button("Re-arm: nudge geometry") {
-                            NotificationCenter.default.post(name: PointerLockDiagnostics.requestGeometryNudge, object: nil)
-                        }
-                    }
-                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             }
+            // Tightened up: the stock form spacing wastes a lot of
+            // vertical room, and this screen has to stay readable without
+            // scrolling while the mouse is captured. There's a limit to
+            // how far this goes before it stops behaving like a normal
+            // iPad list, so it's reduced rather than eliminated.
+            .environment(\.defaultMinListRowHeight, 26)
             .navigationTitle("External Browser")
+            .navigationBarTitleDisplayMode(.inline)
             // The mouse wheel reaches this list as well as the page on the
             // external display, so it would scroll in the background while
             // browsing. Lock it while the mouse is captured — the "Capture

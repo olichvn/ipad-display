@@ -412,18 +412,20 @@ final class InputRelay {
       c.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" style="position:absolute;top:0;left:0;filter:drop-shadow(0 0 1px white)"><path d="M1 1 L1 15 L5 12 L8 18 L10.5 17 L7.5 11 L13 11 Z" fill="black"/></svg>';
       c.style.transformOrigin = '0 0';
       document.documentElement.appendChild(c);
-      window.__extbrowserSetCursor = function(x, y, extraInverse){
+      window.__extbrowserSetCursor = function(x, y, factor){
         // The arrow lives inside the page, so it inherits the page's
-        // zoom: a document with no viewport meta (about:blank) is laid
-        // out narrow and scaled up on a large display, which blew the
-        // cursor up to many times its intended size until a real site
-        // loaded. Counter-scale to keep it visually constant. Only the
-        // drawn size is adjusted — the coordinates are left alone so
-        // click targeting is unchanged. extraInverse carries the page
-        // zoom, which the visual viewport doesn't report.
-        var scale = (window.visualViewport && window.visualViewport.scale) ? window.visualViewport.scale : 1;
-        var inv = (scale > 0 ? (1 / scale) : 1) * (typeof extraInverse === 'number' ? extraInverse : 1);
-        c.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + inv + ')';
+        // scaling: a document with no viewport meta (about:blank) is laid
+        // out narrow and blown up on a large display, which made the
+        // cursor enormous until a real site loaded.
+        //
+        // `factor` is innerWidth/viewWidth — the same number used to
+        // convert the coordinates — and scaling by it keeps the arrow a
+        // constant size on screen. Exactly one correction: an earlier
+        // version also multiplied by visualViewport.scale, but that
+        // describes the same scaling, so applying both shrank the cursor
+        // to a dot.
+        var f = (typeof factor === 'number' && factor > 0) ? factor : 1;
+        c.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + f + ')';
       };
     })();
     """
@@ -438,6 +440,14 @@ final class InputRelay {
     }
 
     private func handleKey(keyCode: GCKeyCode, pressed: Bool) {
+        // Logged before mapping: if a key never appears here, the system
+        // isn't delivering it and no amount of remapping will help.
+        PointerLockDiagnostics.shared.recordRawKey(
+            Int(keyCode.rawValue),
+            pressed: pressed,
+            mapped: KeyCodeMap.modifier(for: keyCode)?.domKey
+                ?? KeyCodeMap.map(keyCode, shift: shiftDown)?.domKey)
+
         if var modifier = KeyCodeMap.modifier(for: keyCode) {
             switch (modifier.kind, AppSettings.shared.altKeySource) {
             case (.meta, .command), (.meta, .both):

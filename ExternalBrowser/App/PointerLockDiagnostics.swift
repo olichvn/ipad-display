@@ -37,10 +37,24 @@ final class PointerLockDiagnostics: ObservableObject {
     /// never sent it" and "the remote session ignored it".
     @Published private(set) var lastKey = "—"
 
+    /// Raw GameController key codes, logged before any mapping. This is
+    /// the only way to tell "iPadOS never handed us the Alt key" apart
+    /// from "we received it and mapped it wrong" — the two have identical
+    /// symptoms but completely different fixes.
+    @Published private(set) var rawKeys: [String] = []
+
     private init() {}
 
     func recordKey(_ description: String) {
         DispatchQueue.main.async { self.lastKey = description }
+    }
+
+    func recordRawKey(_ rawValue: Int, pressed: Bool, mapped: String?) {
+        DispatchQueue.main.async {
+            let name = mapped ?? "unmapped"
+            self.rawKeys.insert("\(rawValue) \(pressed ? "↓" : "↑") \(name)", at: 0)
+            if self.rawKeys.count > 6 { self.rawKeys.removeLast() }
+        }
     }
 
     func recordRead(_ answer: Bool) {
